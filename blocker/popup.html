@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BraveFox Focus Master</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="popup-shell">
+    <header class="topbar">
+      <div class="brand">
+        <img src="../icons/icon48.png" alt="" class="brand-icon">
+        <div><strong>BraveFox</strong><span>Focus Master</span></div>
+      </div>
+      <span class="status-pill" title="Blocking remains active while the manager is locked">✓</span>
+    </header>
+
+    <section class="lock-panel" aria-labelledby="popupTitle">
+      <div class="lock-disc" aria-hidden="true">
+        <svg viewBox="0 0 24 24" role="img">
+          <path d="M7 10V7a5 5 0 0 1 10 0v3h1a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h1zm2 0h6V7a3 3 0 0 0-6 0v3z"/>
+        </svg>
+      </div>
+      <h1 id="popupTitle">BraveFox Focus Master is locked</h1>
+      <p>Enter the BraveFox password to open the manager for its configured unlock period.</p>
+
+      <form id="unlockForm" autocomplete="off" spellcheck="false">
+        <div class="input-row">
+          <input id="passwordInput" type="password" autocomplete="off" placeholder="Enter password" aria-label="Enter password">
+          <button id="unlockButton" type="submit" aria-label="Continue">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l7 7-7 7"/></svg>
+          </button>
+        </div>
+        <p id="errorText" class="error" aria-live="polite"></p>
+      </form>
+
+      <p class="hint">The native internal password prompt appears only after the unlock period expires.</p>
+    </section>
+  </main>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

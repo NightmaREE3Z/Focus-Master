@@ -1,0 +1,166 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #fff;
+  background: #0b4b63;
+}
+
+* { box-sizing: border-box; }
+html, body { width: 100%; min-height: 100%; }
+body { margin: 0; overflow: hidden; }
+
+.blocked-page {
+  position: relative;
+  min-height: 100vh;
+  isolation: isolate;
+  overflow: hidden;
+  background:
+    linear-gradient(rgba(4, 48, 67, .53), rgba(4, 48, 67, .53)),
+    url("assets/pink-panther-ski.png") center center / cover no-repeat;
+}
+
+.blocked-copy {
+  position: fixed;
+  left: 56px;
+  top: clamp(118px, 22vh, 220px);
+  z-index: 2;
+  width: min(780px, calc(100vw - 112px));
+  text-align: left;
+  text-shadow: 0 3px 18px rgba(0, 0, 0, .32);
+}
+
+.blocked-copy h1 {
+  margin: 0;
+  font-size: clamp(48px, 5vw, 78px);
+  line-height: .98;
+  font-weight: 900;
+  letter-spacing: -.045em;
+}
+
+.blocked-copy p {
+  margin: 10px 0 0 2px;
+  font-size: clamp(19px, 2vw, 28px);
+  line-height: 1.25;
+  font-weight: 750;
+  text-shadow: 0 2px 14px rgba(0, 0, 0, .34);
+}
+
+.blocked-card {
+  position: fixed;
+  left: 50vw;
+  top: 50vh;
+  z-index: 2;
+  transform: translate(-50%, -50%);
+  width: min(560px, calc(100vw - 32px));
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, .24);
+  border-radius: 12px;
+  background: rgba(7, 22, 35, .76);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .24);
+  backdrop-filter: blur(8px);
+}
+
+.info-row {
+  display: grid;
+  grid-template-columns: 118px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  min-height: 22px;
+}
+
+.info-row + .info-row { margin-top: 5px; }
+
+.info-label {
+  font-size: 10px;
+  line-height: 1.25;
+  font-weight: 850;
+  letter-spacing: .035em;
+  opacity: .78;
+  white-space: nowrap;
+}
+
+.trigger-value {
+  font-size: 17px;
+  line-height: 1.25;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.attempted-value,
+.source-value {
+  font-size: 12px;
+  line-height: 1.3;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-height: 3.9em;
+  overflow: auto;
+}
+
+.source-row {
+  align-items: start;
+}
+
+.source-value {
+  max-height: 5.2em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+}
+
+.trigger-highlight {
+  display: inline;
+  margin: 0 1px;
+  padding: 0 2px;
+  border-radius: 2px;
+  background: #fff200;
+  color: #111;
+  font: inherit;
+  font-weight: 900;
+}
+
+.close-row {
+  position: fixed;
+  left: 0;
+  top: calc(50vh + 115px);
+  z-index: 3;
+  display: flex;
+  justify-content: center;
+  width: 100vw;
+}
+
+#closeButton {
+  min-width: 92px;
+  min-height: 38px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  background: #3cc196;
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 850;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+}
+
+#closeButton:hover { background: #31ad85; }
+#closeButton:active { transform: translateY(1px); }
+#closeButton:focus-visible { outline: 3px solid rgba(255, 255, 255, .9); outline-offset: 3px; }
+
+@media (max-width: 900px) {
+  .blocked-copy {
+    left: 24px;
+    top: 96px;
+    width: calc(100vw - 48px);
+  }
+  .blocked-copy h1 { font-size: 46px; }
+  .blocked-copy p { font-size: 19px; }
+  .blocked-card { top: 54vh; }
+  .close-row { top: calc(54vh + 115px); }
+}
+
+@media (max-height: 620px) {
+  .blocked-copy { top: 54px; }
+  .blocked-card { top: 56vh; }
+  .close-row { top: calc(56vh + 105px); }
+}

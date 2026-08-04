@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "BraveFox Focus Master",
+  "version": "1.0",
+  "description": "A private use, account-based blocklist for terms and links.",
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": [
+    "storage",
+    "history",
+    "webNavigation",
+    "tabs",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "*://*/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "blocker/blocked.html"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "incognito": "split",
+  "action": {
+    "default_title": "Open BraveFox Focus Master",
+    "default_popup": "blocker/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  }
+}

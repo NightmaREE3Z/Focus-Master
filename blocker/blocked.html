@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="fi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BraveFox Focus Master — Sivusto estetty</title>
+  <link rel="stylesheet" href="blocked.css">
+</head>
+<body>
+  <main class="blocked-page">
+    <section class="blocked-copy" aria-labelledby="blockedTitle">
+      <h1 id="blockedTitle">Sivusto estetty!</h1>
+      <p>Suksi vittuun siitä.</p>
+    </section>
+
+    <section class="blocked-card" aria-label="Eston tiedot">
+      <div class="info-row">
+        <span id="triggerLabel" class="info-label">ESTETTY SANA:</span>
+        <strong id="trigger" class="trigger-value">—</strong>
+      </div>
+      <div class="info-row">
+        <span id="attemptedLabel" class="info-label">YRITETTY HAKU:</span>
+        <span id="attempted" class="attempted-value">—</span>
+      </div>
+      <div id="sourceRow" class="info-row source-row">
+        <span class="info-label">AVATTU LINKKI:</span>
+        <span id="source" class="source-value">—</span>
+      </div>
+    </section>
+
+    <div class="close-row">
+      <button id="closeButton" type="button">Sulje sivu</button>
+    </div>
+  </main>
+  <script type="module" src="blocked.js"></script>
+</body>
+</html>

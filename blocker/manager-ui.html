@@ -1,0 +1,70 @@
+<div id="app" class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <img src="../icons/icon48.png" alt="" class="brand-icon">
+      <div><strong>BraveFox</strong><span>Focus Master</span></div>
+    </div>
+    <nav aria-label="Focus Master sections">
+      <button class="nav-button active" data-view="terms">Terms <span id="termCount">0</span></button>
+      <button class="nav-button" data-view="links">Links <span id="linkCount">0</span></button>
+      <button class="nav-button" data-view="settings">Settings</button>
+    </nav>
+    <div class="sidebar-footer">
+      <span id="syncLabel">Saved locally + Chrome profile sync</span>
+      <button class="ghost-button" data-sync-now>Sync now</button>
+      <button id="lockButton" class="ghost-button">Lock manager</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="viewTitle">Blocked terms</h1>
+        <p id="viewSubtitle">Manage words and phrases that trigger blocking.</p>
+      </div>
+    </header>
+
+    <section id="listView" class="panel">
+      <div class="add-row">
+        <input id="addInput" type="text" autocomplete="off" placeholder="Add a term or phrase">
+        <button id="addButton" class="primary-button">Add</button>
+      </div>
+
+      <div class="toolbar">
+        <input id="searchInput" type="search" placeholder="Search the blocklist">
+        <span class="toolbar-spacer"></span>
+        <select id="importMode" aria-label="Import mode">
+          <option value="merge">Merge import</option>
+          <option value="replace">Replace list</option>
+        </select>
+        <button id="importButton" class="secondary-button">Import CSV</button>
+        <button id="exportButton" class="secondary-button">Export CSV</button>
+        <input id="fileInput" type="file" accept=".csv,.txt,text/csv,text/plain" hidden>
+      </div>
+
+      <p class="order-note">Order follows the CSV. Merge imports append new unique entries; manual additions go to the end.</p>
+      <div id="emptyState" class="empty-state" hidden>No entries yet.</div>
+      <div id="items" class="items" role="list"></div>
+    </section>
+
+    <section id="settingsView" class="settings-shell" hidden>
+      <article id="adminLocked" class="settings-lock-card">
+        <div class="settings-lock-icon" aria-hidden="true">🔒</div>
+        <div class="settings-lock-copy">
+          <h2>Settings are locked</h2>
+          <p>Enter the fixed BraveFox password to open protected enforcement controls, synchronization and backups.</p>
+          <form id="adminUnlockForm" class="settings-unlock-form" autocomplete="off">
+            <div class="password-row">
+              <input id="adminPasswordInput" type="password" autocomplete="current-password" placeholder="Enter password" aria-label="Enter the BraveFox password">
+              <button id="adminUnlockButton" class="primary-button" type="submit">Unlock settings</button>
+            </div>
+            <div id="adminError" class="inline-error" role="alert" aria-live="polite"></div>
+          </form>
+        </div>
+      </article>
+      <div id="adminControlsMount"></div>
+    </section>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </main>
+</div>

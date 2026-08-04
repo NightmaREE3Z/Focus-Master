@@ -1,0 +1,80 @@
+<div id="adminControls" class="settings-controls">
+  <div class="settings-unlocked-bar">
+    <span class="status-badge unlocked">Unlocked</span>
+    <button id="lockAdminButton" class="secondary-button" type="button">Lock settings</button>
+  </div>
+
+  <section class="setting-card master-setting-card">
+    <div class="admin-master-row">
+      <div>
+        <h2>Enable Focus Master</h2>
+        <p>Turning it off stops both term and link enforcement. Your lists and choices stay saved.</p>
+      </div>
+      <label class="master-toggle"><input id="enabledToggle" type="checkbox"><span>Focus Master enabled</span></label>
+    </div>
+  </section>
+
+  <section id="adminEnabledOptions" class="setting-card protected-dependent-group">
+    <h2>Blocking</h2>
+    <p>These controls are unavailable while the Focus Master is disabled.</p>
+    <label class="checkbox-line"><input id="blockTermsToggle" type="checkbox"> Block search terms and phrases</label>
+    <label class="checkbox-line"><input id="blockLinksToggle" type="checkbox"> Block websites and URL paths</label>
+  </section>
+
+  <section id="redirectSettings" class="setting-card protected-dependent-group">
+    <h2>Redirects</h2>
+    <p>Use the internal Pink Panther page or redirect each block type to its own synchronized destination.</p>
+
+    <div id="termRedirectEditor" class="redirect-editor">
+      <label class="checkbox-line"><input id="redirectTermsToggle" type="checkbox"> Redirect blocked term matches</label>
+      <div class="redirect-row">
+        <input id="redirectTermsUrlInput" type="url" inputmode="url" autocomplete="url" placeholder="Term redirect URL (for example, google.com)">
+        <button id="saveTermRedirectButton" class="secondary-button" type="button">Save</button>
+        <button id="clearTermRedirectButton" class="secondary-button" type="button">Clear</button>
+      </div>
+    </div>
+
+    <div id="linkRedirectEditor" class="redirect-editor">
+      <label class="checkbox-line"><input id="redirectLinksToggle" type="checkbox"> Redirect blocked website and path matches</label>
+      <div class="redirect-row">
+        <input id="redirectLinksUrlInput" type="url" inputmode="url" autocomplete="url" placeholder="Link redirect URL (for example, example.com)">
+        <button id="saveLinkRedirectButton" class="secondary-button" type="button">Save</button>
+        <button id="clearLinkRedirectButton" class="secondary-button" type="button">Clear</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="setting-card">
+    <h2>Manager authentication</h2>
+    <label class="select-line">Unlock period
+      <select id="ttlSelect">
+        <option value="1">1 minute</option>
+        <option value="5">5 minutes</option>
+        <option value="15">15 minutes</option>
+        <option value="30">30 minutes</option>
+        <option value="60">60 minutes</option>
+      </select>
+    </label>
+    <p>The toolbar password opens the manager for this period. When it expires, the native BraveFox password page re-authenticates the same trusted manager tab.</p>
+  </section>
+
+  <section class="setting-card">
+    <h2>Backup</h2>
+    <p>CSV exports preserve list order. JSON stores both ordered lists and all protected settings.</p>
+    <div class="button-row wrap-buttons">
+      <button id="importBackupButton" class="secondary-button" type="button">Restore full JSON</button>
+      <button id="exportBackupButton" class="secondary-button" type="button">Export full JSON</button>
+      <button id="exportTermsButton" class="secondary-button" type="button">Export Terms</button>
+      <button id="exportLinksButton" class="secondary-button" type="button">Export Links</button>
+      <input id="backupInput" type="file" accept=".json,application/json" hidden>
+    </div>
+  </section>
+
+  <section class="setting-card">
+    <h2>Synchronization</h2>
+    <p>Immediately reconcile the persistent local copy with Chrome profile sync. The newest saved revision wins.</p>
+    <div class="button-row">
+      <button class="secondary-button" type="button" data-sync-now>Sync now</button>
+    </div>
+  </section>
+</div>
