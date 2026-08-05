@@ -1,4 +1,4 @@
-import { COMPLETE_EXCLUSION_HOSTS } from './constants.js';
+import { isTrustedHostname, isTrustedUrl } from './trusted-sites.js';
 
 export function normalizeWhitespace(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -105,15 +105,8 @@ export function isSupportedWebUrl(value) {
   }
 }
 
-export function isCompletelyExcludedUrl(value) {
-  try {
-    const host = new URL(value).hostname.toLocaleLowerCase('en-US').replace(/\.$/, '');
-    return COMPLETE_EXCLUSION_HOSTS.some(item => host === item || host.endsWith(`.${item}`)) ||
-      /^translate\.google\./i.test(host);
-  } catch {
-    return false;
-  }
-}
+export const isCompletelyExcludedHostname = isTrustedHostname;
+export const isCompletelyExcludedUrl = isTrustedUrl;
 
 export function isIncognitoSender(sender) {
   return Boolean(

@@ -12,7 +12,10 @@
     "history",
     "webNavigation",
     "tabs",
-    "nativeMessaging"
+    "nativeMessaging",
+    "alarms",
+    "identity",
+    "identity.email"
   ],
   "host_permissions": [
     "*://*/*"
@@ -41,5 +44,9 @@
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     }
+  },
+  "options_ui": {
+    "page": "blocker/options.html",
+    "open_in_tab": true
   }
 }

@@ -1,3 +1,4 @@
+import { browser } from './api.js';
 import { BLOCKER_VERSION, MESSAGE, STORAGE_KEYS } from './constants.js';
 import {
   cleanupTabAuth,
@@ -14,6 +15,16 @@ import {
   verifyPassword
 } from './auth.js';
 import { findBlockReason } from './matcher.js';
+import { findBlockedHost, initializeHosts } from './hosts.js';
+import {
+  downloadGitHubLists,
+  getGitHubSyncStatus,
+  initializeGitHubSync,
+  queueRemoteOperation,
+  queueRemoteSnapshot,
+  saveGitHubSyncConfig,
+  uploadGitHubLists
+} from './github-sync.js';
 import {
   getSettings,
   invalidateDatasetCache,
@@ -22,6 +33,7 @@ import {
   synchronizeNow,
   updateSettings
 } from './storage.js';
+import { initializeTrustedSites } from './trusted-sites.js';
 import {
   isCompletelyExcludedUrl,
   isIncognitoSender,
@@ -34,16 +46,16 @@ import {
 const recentlyRedirected = new Map();
 const redirectInFlight = new Set();
 const redirectLandingBypass = new Map();
-const EXTENSION_ORIGIN = new URL(chrome.runtime.getURL('/')).origin;
+const EXTENSION_ORIGIN = new URL(browser.runtime.getURL('/')).origin;
 
 // ---------------------------------------------------------------------------
 // Native redirect logging
 // ---------------------------------------------------------------------------
 const NATIVE_LOGGER_HOST = 'com.bravefox.redirect_logger';
-const NATIVE_LOG_SOURCE = chrome.runtime.getManifest().name === 'BraveFox Focus Master'
-  ? 'BraveFox Focus Master'
-  : 'BraveFox Focus Master (BFE)';
+const NATIVE_LOG_SOURCE = 'BraveFox Focus Master (BFFM)';
+const NATIVE_LOG_SOURCE_CODE = 'BFFM';
 const recentNativeLogKeys = new Map();
+let nativeBrowserInfoPromise = null;
 
 function cleanNativeLogText(value, maxLength = 1000) {
   return String(value ?? '')
@@ -81,8 +93,50 @@ function pruneNativeLogKeys() {
   }
 }
 
-function sendNativeBlockLog(reason, sourceUrl, redirectTarget = '') {
-  if (!reason || typeof chrome.runtime?.sendNativeMessage !== 'function') return;
+function parseChromiumBrowserInfo() {
+  if (!nativeBrowserInfoPromise) {
+    nativeBrowserInfoPromise = (async () => {
+      const ua = String(globalThis.navigator?.userAgent || '');
+      let browserName = 'Chrome';
+      let browserVersion = '';
+
+      const edge = /Edg\/([\d.]+)/i.exec(ua);
+      const opera = /(?:OPR|Opera)\/([\d.]+)/i.exec(ua);
+      const vivaldi = /Vivaldi\/([\d.]+)/i.exec(ua);
+      const chrome = /(?:Chrome|CriOS)\/([\d.]+)/i.exec(ua);
+
+      if (edge) {
+        browserName = 'Edge';
+        browserVersion = edge[1];
+      } else if (opera) {
+        browserName = 'Opera';
+        browserVersion = opera[1];
+      } else if (vivaldi) {
+        browserName = 'Vivaldi';
+        browserVersion = vivaldi[1];
+      } else if (chrome) {
+        browserVersion = chrome[1];
+        try {
+          if (globalThis.navigator?.brave?.isBrave && await globalThis.navigator.brave.isBrave()) {
+            browserName = 'Brave';
+          }
+        } catch {}
+      }
+
+      return {
+        browserName,
+        browserVersion,
+        browserEdition: '',
+        browserBuildId: '',
+        browserPlatform: 'desktop'
+      };
+    })();
+  }
+  return nativeBrowserInfoPromise;
+}
+
+async function sendNativeBlockLog(reason, sourceUrl, redirectTarget = '') {
+  if (!reason || typeof browser.runtime?.sendNativeMessage !== 'function') return;
 
   const blockedWord = cleanNativeLogText(reason.trigger, 240);
   const attemptedSearch = highlightNativeLogSearch(reason.attemptedSearch, blockedWord);
@@ -93,22 +147,28 @@ function sendNativeBlockLog(reason, sourceUrl, redirectTarget = '') {
   if (recentNativeLogKeys.has(key)) return;
   recentNativeLogKeys.set(key, Date.now());
 
+  const browserInfo = await parseChromiumBrowserInfo();
+  const manifest = browser.runtime.getManifest();
   const payload = {
     type: 'BRAVEFOX_REDIRECT_LOG',
     source: NATIVE_LOG_SOURCE,
+    sourceCode: NATIVE_LOG_SOURCE_CODE,
+    extensionName: manifest.name || '',
+    extensionVersion: manifest.version || '',
+    reasonType: reason.type || (blockedWord ? 'term' : 'unknown'),
+    reasonDetail: reason.type === 'link' ? 'Focus Master blocked-link matcher' : 'Focus Master blocked-term matcher',
     blockedWord,
     attemptedSearch,
     context: reason.type === 'link' ? 'blocked-link' : 'blocked-term',
     pageUrl,
     referrer: cleanNativeLogText(redirectTarget, 1000),
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    ...browserInfo
   };
 
   try {
-    chrome.runtime.sendNativeMessage(NATIVE_LOGGER_HOST, payload, () => {
-      // Accessing lastError suppresses the default console warning. Blocking must
-      // continue normally when the optional native logger is not installed.
-      void chrome.runtime.lastError;
+    browser.runtime.sendNativeMessage(NATIVE_LOGGER_HOST, payload, () => {
+      void browser.runtime.lastError;
     });
   } catch {}
 }
@@ -119,15 +179,19 @@ function senderTabId(sender) { return Number.isInteger(sender?.tab?.id) ? sender
 function senderIsInternalPage(sender, pathname) {
   try {
     const url = new URL(senderUrl(sender));
-    return sender?.id === chrome.runtime.id && url.origin === EXTENSION_ORIGIN && url.pathname === pathname;
+    return sender?.id === browser.runtime.id && url.origin === EXTENSION_ORIGIN && url.pathname === pathname;
   } catch { return false; }
 }
 function senderIsManager(sender) { return senderIsInternalPage(sender, '/blocker/manager.html'); }
-function senderIsPopup(sender) { return senderIsInternalPage(sender, '/blocker/popup.html'); }
+function senderIsOptionsPage(sender) { return senderIsInternalPage(sender, '/blocker/options.html'); }
+function senderIsLauncher(sender) {
+  return senderIsInternalPage(sender, '/blocker/popup.html') ||
+    senderIsInternalPage(sender, '/blocker/options.html');
+}
 function senderIsPasswordPage(sender, target) {
   try {
     const url = new URL(senderUrl(sender));
-    return sender?.id === chrome.runtime.id && url.origin === EXTENSION_ORIGIN &&
+    return sender?.id === browser.runtime.id && url.origin === EXTENSION_ORIGIN &&
       url.pathname === '/html/password-protected.html' && url.searchParams.get('target') === target;
   } catch { return false; }
 }
@@ -199,7 +263,8 @@ async function fullState(sender) {
     links: dataset.links,
     settings,
     adminUnlocked: await isAdminTabUnlocked(tabId),
-    storageStatus: publicStorageStatus(dataset)
+    storageStatus: publicStorageStatus(dataset),
+    githubSync: await getGitHubSyncStatus()
   };
 }
 
@@ -234,7 +299,26 @@ async function mutateDataset(kind, operation, payload) {
     terms: kind === 'terms' ? next : dataset.terms,
     links: kind === 'links' ? next : dataset.links
   });
-  return { ok: true, terms: saved.terms, links: saved.links, storageStatus: publicStorageStatus(saved) };
+
+  if (operation === 'add' || operation === 'remove') {
+    await queueRemoteOperation(kind, operation, payload.value);
+  } else if (operation === 'merge') {
+    const currentSet = new Set(current.map(normalizer));
+    for (const value of next) {
+      if (!currentSet.has(normalizer(value))) await queueRemoteOperation(kind, 'add', value);
+    }
+  } else if (operation === 'replace') {
+    await queueRemoteSnapshot(kind);
+  }
+
+  return {
+    ok: true,
+    changed: true,
+    terms: saved.terms,
+    links: saved.links,
+    storageStatus: publicStorageStatus(saved),
+    githubSync: await getGitHubSyncStatus()
+  };
 }
 
 function normalizedComparableUrl(value) {
@@ -272,7 +356,7 @@ function blockedPageUrl(reason, sourceUrl) {
     source: sourceUrl,
     attempted: reason.attemptedSearch || ''
   });
-  return chrome.runtime.getURL(`blocker/blocked.html?${params.toString()}`);
+  return browser.runtime.getURL(`blocker/blocked.html?${params.toString()}`);
 }
 
 async function evaluateNavigation(tabId, url, title = '') {
@@ -282,8 +366,14 @@ async function evaluateNavigation(tabId, url, title = '') {
   const last = recentlyRedirected.get(tabId);
   if (last && last.url === url && Date.now() - last.at < 1500) return;
 
-  const [dataset, settings] = await Promise.all([loadDataset(), getSettings()]);
-  const reason = findBlockReason({ url, title }, dataset, settings);
+  const [dataset, settings, blockedHost] = await Promise.all([
+    loadDataset(),
+    getSettings(),
+    findBlockedHost(url)
+  ]);
+  const reason = blockedHost
+    ? { type: 'link', trigger: blockedHost, attemptedSearch: '' }
+    : findBlockReason({ url, title }, dataset, settings);
   if (!reason) return;
 
   redirectInFlight.add(tabId);
@@ -293,11 +383,11 @@ async function evaluateNavigation(tabId, url, title = '') {
     sendNativeBlockLog(reason, url, directTarget);
     if (directTarget) {
       redirectLandingBypass.set(tabId, { url: directTarget, expiresAt: Date.now() + 15_000 });
-      await chrome.tabs.update(tabId, { url: directTarget });
+      await browser.tabs.update(tabId, { url: directTarget });
     } else {
-      await chrome.tabs.update(tabId, { url: blockedPageUrl(reason, url) });
+      await browser.tabs.update(tabId, { url: blockedPageUrl(reason, url) });
     }
-    try { await chrome.history.deleteUrl({ url }); } catch {}
+    try { await browser.history.deleteUrl({ url }); } catch {}
   } catch (error) {
     console.warn('[BraveFox Focus Master] Redirect failed:', error);
   } finally {
@@ -306,39 +396,39 @@ async function evaluateNavigation(tabId, url, title = '') {
 }
 
 async function authenticatePopupAndOpen(message, sender) {
-  if (!senderIsPopup(sender)) throw new Error('Popup unlock request denied.');
+  if (!senderIsLauncher(sender)) throw new Error('Focus Master launcher request denied.');
   if (isIncognitoSender(sender)) throw new Error('Management is unavailable in Incognito.');
   if (!(await verifyPassword(message.password))) return { ok: true, unlocked: false };
 
-  const tab = await chrome.tabs.create({ url: 'about:blank', active: true });
+  const tab = await browser.tabs.create({ url: 'about:blank', active: true });
   if (!Number.isInteger(tab.id)) throw new Error('Could not create the manager tab.');
   try {
     await registerManagerTab(tab.id);
     await establishManagerSession(tab.id);
-    await chrome.tabs.update(tab.id, { url: chrome.runtime.getURL('blocker/manager.html') });
+    await browser.tabs.update(tab.id, { url: browser.runtime.getURL('blocker/manager.html') });
   } catch (error) {
-    await chrome.tabs.remove(tab.id).catch(() => {});
+    await browser.tabs.remove(tab.id).catch(() => {});
     throw error;
   }
   return { ok: true, unlocked: true };
 }
 
-chrome.webNavigation.onBeforeNavigate.addListener(details => {
+browser.webNavigation.onBeforeNavigate.addListener(details => {
   if (details.frameId !== 0) return;
   void evaluateNavigation(details.tabId, details.url, '');
 });
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   const url = changeInfo.url || tab.url || '';
   const title = changeInfo.title || tab.title || '';
   if (url) void evaluateNavigation(tabId, url, title);
 });
-chrome.tabs.onRemoved.addListener(tabId => {
+browser.tabs.onRemoved.addListener(tabId => {
   recentlyRedirected.delete(tabId);
   redirectInFlight.delete(tabId);
   redirectLandingBypass.delete(tabId);
   void cleanupTabAuth(tabId);
 });
-chrome.storage.onChanged.addListener((changes, areaName) => {
+browser.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === 'sync') {
     if (changes[STORAGE_KEYS.datasetMeta] || Object.keys(changes).some(key => key.startsWith('bfb:data:'))) {
       invalidateDatasetCache();
@@ -347,7 +437,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   } else if (areaName === 'local' && changes[STORAGE_KEYS.localDataset]) invalidateDatasetCache();
 });
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message?.type || !String(message.type).startsWith('BFB_')) return;
   (async () => {
     switch (message.type) {
@@ -359,6 +449,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return fullState(sender);
       case MESSAGE.popupUnlockOpen:
         return authenticatePopupAndOpen(message, sender);
+      case MESSAGE.quickAddItem: {
+        if (!senderIsOptionsPage(sender)) throw new Error('Quick Block request denied.');
+        if (isIncognitoSender(sender)) throw new Error('Quick Block is unavailable in private browsing.');
+        const kind = message.kind === 'links' ? 'links' : message.kind === 'terms' ? 'terms' : '';
+        if (!kind) throw new Error('Choose Add Term or Add Link first.');
+        const normalizer = kind === 'links' ? normalizeLinkForStorage : normalizeTerm;
+        const value = normalizer(message.value);
+        if (!value) throw new Error(kind === 'links' ? 'Enter a valid link.' : 'Enter a valid term.');
+        const result = await mutateDataset(kind, 'add', { value });
+        const values = kind === 'links' ? result.links : result.terms;
+        return {
+          ok: true,
+          changed: Boolean(result.changed),
+          kind,
+          value,
+          count: values.length,
+          storageStatus: result.storageStatus,
+          githubSync: result.githubSync
+        };
+      }
       case MESSAGE.unlock: {
         if (!senderIsPasswordPage(sender, 'blocker-manager')) throw new Error('Unlock request denied.');
         if (isIncognitoSender(sender)) throw new Error('Management is unavailable in Incognito.');
@@ -401,6 +511,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case MESSAGE.replaceAll: {
         const tabId = await requireAdminAccess(sender);
         const saved = await saveDataset({ terms: message.terms, links: message.links });
+        await Promise.all([queueRemoteSnapshot('terms'), queueRemoteSnapshot('links')]);
         const settings = await updateSettings(sanitizeAdminPatch(message.settings));
         return {
           ok: true,
@@ -424,6 +535,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           storageStatus: publicStorageStatus(result.dataset)
         };
       }
+      case MESSAGE.getGitHubSyncStatus:
+        await requireManagerAccess(sender);
+        return { ok: true, githubSync: await getGitHubSyncStatus() };
+      case MESSAGE.saveGitHubSyncConfig:
+        await requireManagerAccess(sender);
+        return {
+          ok: true,
+          githubSync: await saveGitHubSyncConfig({
+            autoSync: message.autoSync,
+            token: message.token,
+            clearToken: Boolean(message.clearToken),
+            activeProfile: message.activeProfile,
+            confirmProfileSwitch: Boolean(message.confirmProfileSwitch),
+            profileExplicit: Boolean(message.profileExplicit)
+          })
+        };
+      case MESSAGE.downloadGitHubLists: {
+        await requireManagerAccess(sender);
+        const result = await downloadGitHubLists({ allowBundledFallback: true });
+        return {
+          ok: true,
+          terms: result.dataset.terms,
+          links: result.dataset.links,
+          storageStatus: publicStorageStatus(result.dataset),
+          githubSync: await getGitHubSyncStatus(),
+          usedBundledFallback: Boolean(result.usedBundledFallback)
+        };
+      }
+      case MESSAGE.uploadGitHubLists: {
+        await requireManagerAccess(sender);
+        const result = await uploadGitHubLists();
+        return {
+          ok: true,
+          terms: result.dataset.terms,
+          links: result.dataset.links,
+          storageStatus: publicStorageStatus(result.dataset),
+          githubSync: await getGitHubSyncStatus()
+        };
+      }
       case MESSAGE.openManager:
         throw new Error('Enter the popup password to open BraveFox Focus Master.');
       default:
@@ -433,7 +583,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
-void chrome.storage.sync.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }).catch(() => {});
-void chrome.storage.sync.remove(STORAGE_KEYS.auth).catch(() => {});
-void loadDataset({ force: true }).catch(error => console.warn('[BraveFox Focus Master] Initial dataset load failed:', error));
-console.log(`[BraveFox Focus Master] Module ${BLOCKER_VERSION} initialized with resilient manager re-authentication, password-gated Settings, ordered persistent lists, dual redirects, manual profile sync, and native redirect logging.`);
+void browser.storage.sync.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }).catch(() => {});
+void browser.storage.sync.remove(STORAGE_KEYS.auth).catch(() => {});
+void (async () => {
+  try {
+    await initializeTrustedSites();
+    await initializeGitHubSync();
+    await loadDataset({ force: true });
+  } catch (error) {
+    console.warn('[BraveFox Focus Master] Startup initialization failed:', error);
+  }
+})();
+void initializeHosts().catch(error => console.warn('[BraveFox Focus Master] Hosts initialization failed:', error));
+console.log(`[BraveFox Focus Master] Module ${BLOCKER_VERSION} initialized with local lists, browser profile mirroring, cross-browser GitHub sync, and bundled fallbacks.`);

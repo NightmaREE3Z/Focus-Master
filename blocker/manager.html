@@ -3,14 +3,224 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="platform-ui.js"></script>
   <title>BraveFox Focus Master</title>
   <link rel="stylesheet" href="manager.css">
 </head>
-<body>
+<body data-page="manager">
   <main id="bootScreen" class="boot-screen" aria-live="polite">
     <img src="../icons/icon48.png" alt="" class="boot-icon">
     <strong>Opening BraveFox Focus Master…</strong>
   </main>
+
+  <div id="app" class="app" hidden>
+  <aside class="sidebar">
+    <div class="brand">
+      <img src="../icons/icon48.png" alt="" class="brand-icon">
+      <div><strong>BraveFox</strong><span>Focus Master</span></div>
+    </div>
+    <nav aria-label="Focus Master sections">
+      <button class="nav-button active" data-view="terms">Terms <span id="termCount">0</span></button>
+      <button class="nav-button" data-view="links">Links <span id="linkCount">0</span></button>
+      <button class="nav-button" data-view="settings">Settings</button>
+    </nav>
+    <div class="sidebar-footer">
+      <span id="syncLabel">Local lists active — GitHub sync available</span>
+      <button class="ghost-button" data-open-sync-dialog>Sync</button>
+      <button id="lockButton" class="ghost-button">Lock manager</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="viewTitle">Blocked terms</h1>
+        <p id="viewSubtitle">Manage words and phrases that trigger blocking.</p>
+      </div>
+    </header>
+
+    <section id="listView" class="panel">
+      <div class="add-row">
+        <input id="addInput" type="text" autocomplete="off" placeholder="Add a term or phrase">
+        <button id="addButton" class="primary-button">Add</button>
+      </div>
+
+      <div class="toolbar">
+        <input id="searchInput" type="search" placeholder="Search the blocklist">
+        <span class="toolbar-spacer"></span>
+        <select id="importMode" aria-label="Import mode">
+          <option value="merge">Merge import</option>
+          <option value="replace">Replace list</option>
+        </select>
+        <button id="importButton" class="secondary-button">Import CSV</button>
+        <button id="exportButton" class="secondary-button">Export CSV</button>
+        <input id="fileInput" type="file" accept=".csv,.txt,text/csv,text/plain" hidden>
+      </div>
+
+      <p class="order-note">Order follows the CSV. Merge imports append new unique entries; manual additions go to the end.</p>
+      <div id="emptyState" class="empty-state" hidden>No entries yet.</div>
+      <div id="items" class="items" role="list"></div>
+    </section>
+
+    <section id="settingsView" class="settings-shell" hidden>
+      <article id="adminLocked" class="settings-lock-card">
+        <div class="settings-lock-icon" aria-hidden="true">🔒</div>
+        <div class="settings-lock-copy">
+          <h2>Settings are locked</h2>
+          <p>Enter the fixed BraveFox password to open protected enforcement controls, synchronization and backups.</p>
+          <form id="adminUnlockForm" class="settings-unlock-form" autocomplete="off">
+            <div class="password-row">
+              <input id="adminPasswordInput" type="password" autocomplete="current-password" placeholder="Enter password" aria-label="Enter the BraveFox password">
+              <button id="adminUnlockButton" class="primary-button" type="submit">Unlock settings</button>
+            </div>
+            <div id="adminError" class="inline-error" role="alert" aria-live="polite"></div>
+          </form>
+        </div>
+      </article>
+      <div id="adminControlsMount"></div>
+    </section>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </main>
+</div>
+
+
+  <dialog id="syncDialog" class="sync-dialog" aria-labelledby="syncDialogTitle">
+    <div class="sync-dialog-shell">
+      <header class="sync-dialog-header">
+        <div>
+          <h2 id="syncDialogTitle">GitHub Blocklist Sync</h2>
+          <p>Synchronize blocked terms and links between Chrome, Firefox PC and Firefox Android.</p>
+        </div>
+        <button id="closeSyncDialog" class="dialog-close" type="button" aria-label="Close sync dialog">×</button>
+      </header>
+
+      <section class="sync-dialog-section">
+        <h3>Public list files</h3>
+        <p>Downloads use the public raw files. Uploads use GitHub’s API because raw links are read-only.</p>
+        <div class="sync-link-list">
+          <a id="termsRawLink" target="_blank" rel="noreferrer">blockedTerms.csv</a>
+          <a id="linksRawLink" target="_blank" rel="noreferrer">blockedLinks.csv</a>
+          <a id="trustedSitesRawLink" target="_blank" rel="noreferrer">TrustedSites.csv</a>
+        </div>
+      </section>
+
+      <section class="sync-dialog-section">
+        <h3>Sync Profile</h3>
+        <label class="field-label" for="syncProfileSelect">Blocked terms profile</label>
+        <select id="syncProfileSelect">
+          <option value="haukkis">Haukkis — blockedTerms.csv</option>
+          <option value="tapsa">Tapsa — blockedTermsDad.csv</option>
+        </select>
+        <p id="syncProfileHelp" class="field-help">Blocked links and TrustedSites.csv are global. Changing profile does not replace the current terms until you manually Download or Upload.</p>
+        <p id="detectedProfileStatus" class="field-help" aria-live="polite"></p>
+      </section>
+
+      <section class="sync-dialog-section">
+        <label class="field-label" for="githubTokenInput">Fine-grained GitHub token</label>
+        <input id="githubTokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="Token with repository Contents: read/write">
+        <p class="field-help">Stored only in this browser profile’s local extension storage. Never bundled into the extension package or uploaded to the list repository.</p>
+        <label class="checkbox-line sync-auto-line"><input id="automaticSyncToggle" type="checkbox" checked> Automatic Sync</label>
+        <p class="field-help">Checks every 15 minutes and shortly after changes. Terms use the selected Sync Profile; links are global. TrustedSites.csv is centrally managed and download-only.</p>
+        <button id="clearGithubToken" class="secondary-button danger-lite" type="button">Forget saved token</button>
+      </section>
+
+      <section class="sync-dialog-section sync-status-section">
+        <h3>Status</h3>
+        <p id="githubSyncStatus" class="github-sync-status" aria-live="polite">Loading sync status…</p>
+      </section>
+
+      <footer class="sync-dialog-actions">
+        <button id="saveGithubSyncSettings" class="secondary-button" type="button">Save Sync Settings</button>
+        <button id="downloadFromGithub" class="secondary-button" type="button">Download from GitHub</button>
+        <button id="uploadToGithub" class="primary-button" type="button">Upload to GitHub</button>
+      </footer>
+    </div>
+  </dialog>
+
+  <template id="adminUiTemplate">
+<div id="adminControls" class="settings-controls">
+  <div class="settings-unlocked-bar">
+    <span class="status-badge unlocked">Unlocked</span>
+    <button id="lockAdminButton" class="secondary-button" type="button">Lock settings</button>
+  </div>
+
+  <section class="setting-card master-setting-card">
+    <div class="admin-master-row">
+      <div>
+        <h2>Enable Focus Master</h2>
+        <p>Turning it off stops both term and link enforcement. Your lists and choices stay saved.</p>
+      </div>
+      <label class="master-toggle"><input id="enabledToggle" type="checkbox"><span>Focus Master enabled</span></label>
+    </div>
+  </section>
+
+  <section id="adminEnabledOptions" class="setting-card protected-dependent-group">
+    <h2>Blocking</h2>
+    <p>These controls are unavailable while the master blocker is disabled.</p>
+    <label class="checkbox-line"><input id="blockTermsToggle" type="checkbox"> Block search terms and phrases</label>
+    <label class="checkbox-line"><input id="blockLinksToggle" type="checkbox"> Block websites and URL paths</label>
+  </section>
+
+  <section id="redirectSettings" class="setting-card protected-dependent-group">
+    <h2>Redirects</h2>
+    <p>Use the internal Pink Panther page or redirect each block type to its own synchronized destination.</p>
+
+    <div id="termRedirectEditor" class="redirect-editor">
+      <label class="checkbox-line"><input id="redirectTermsToggle" type="checkbox"> Redirect blocked term matches</label>
+      <div class="redirect-row">
+        <input id="redirectTermsUrlInput" type="url" inputmode="url" autocomplete="url" placeholder="Term redirect URL (for example, google.com)">
+        <button id="saveTermRedirectButton" class="secondary-button" type="button">Save</button>
+        <button id="clearTermRedirectButton" class="secondary-button" type="button">Clear</button>
+      </div>
+    </div>
+
+    <div id="linkRedirectEditor" class="redirect-editor">
+      <label class="checkbox-line"><input id="redirectLinksToggle" type="checkbox"> Redirect blocked website and path matches</label>
+      <div class="redirect-row">
+        <input id="redirectLinksUrlInput" type="url" inputmode="url" autocomplete="url" placeholder="Link redirect URL (for example, example.com)">
+        <button id="saveLinkRedirectButton" class="secondary-button" type="button">Save</button>
+        <button id="clearLinkRedirectButton" class="secondary-button" type="button">Clear</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="setting-card">
+    <h2>Manager authentication</h2>
+    <label class="select-line">Unlock period
+      <select id="ttlSelect">
+        <option value="1">1 minute</option>
+        <option value="5">5 minutes</option>
+        <option value="15">15 minutes</option>
+        <option value="30">30 minutes</option>
+        <option value="60">60 minutes</option>
+      </select>
+    </label>
+    <p>The add-on menu password opens the manager for this period. When it expires, the native BraveFox password page re-authenticates the same trusted manager tab.</p>
+  </section>
+
+  <section class="setting-card">
+    <h2>Backup</h2>
+    <p>CSV exports preserve list order. JSON stores both ordered lists and all protected settings.</p>
+    <div class="button-row wrap-buttons">
+      <button id="importBackupButton" class="secondary-button" type="button">Restore full JSON</button>
+      <button id="exportBackupButton" class="secondary-button" type="button">Export full JSON</button>
+      <button id="exportTermsButton" class="secondary-button" type="button">Export Terms</button>
+      <button id="exportLinksButton" class="secondary-button" type="button">Export Links</button>
+      <input id="backupInput" type="file" accept=".json,application/json" hidden>
+    </div>
+  </section>
+
+  <section class="setting-card">
+    <h2>Synchronization</h2>
+    <p>Open the GitHub sync controls to upload, download or change automatic cross-browser synchronization.</p>
+    <div class="button-row">
+      <button class="secondary-button" type="button" data-open-sync-dialog>Open GitHub Sync</button>
+    </div>
+  </section>
+</div>
+  </template>
+
   <script type="module" src="manager.js"></script>
 </body>
 </html>

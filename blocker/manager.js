@@ -1,3 +1,4 @@
+import { browser } from './api.js';
 import { MESSAGE } from './constants.js';
 import {
   parseFullBackup,
@@ -13,6 +14,7 @@ const state = {
   links: [],
   settings: {},
   storageStatus: {},
+  githubSync: null,
   adminUnlocked: false
 };
 
@@ -28,11 +30,11 @@ function isLockError(message) {
 
 function openNativePasswordPage() {
   const params = new URLSearchParams({ target: 'blocker-manager' });
-  window.location.replace(chrome.runtime.getURL(`html/password-protected.html?${params.toString()}`));
+  window.location.replace(browser.runtime.getURL(`html/password-protected.html?${params.toString()}`));
 }
 
 function openPopupRequiredPage() {
-  window.location.replace(chrome.runtime.getURL('blocker/popup-required.html'));
+  window.location.replace(browser.runtime.getURL('blocker/popup-required.html'));
 }
 
 function secureLockout(registered = true) {
@@ -44,19 +46,20 @@ function secureLockout(registered = true) {
   else openPopupRequiredPage();
 }
 
-function message(payload, { redirectOnLock = true } = {}) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(payload, response => {
-      const runtimeError = chrome.runtime.lastError;
-      const errorText = runtimeError?.message || (!response?.ok ? (response?.error || 'BraveFox Focus Master request failed.') : '');
-      if (errorText) {
-        if (redirectOnLock && isLockError(errorText)) secureLockout(true);
-        reject(new Error(errorText || 'BraveFox Focus Master request failed.'));
-        return;
-      }
-      resolve(response);
-    });
-  });
+async function message(payload, { redirectOnLock = true } = {}) {
+  try {
+    const response = await browser.runtime.sendMessage(payload);
+    if (!response?.ok) {
+      const errorText = response?.error || 'BraveFox Focus Master request failed.';
+      if (redirectOnLock && isLockError(errorText)) secureLockout(true);
+      throw new Error(errorText);
+    }
+    return response;
+  } catch (error) {
+    const errorText = String(error?.message || error || 'BraveFox Focus Master request failed.');
+    if (redirectOnLock && isLockError(errorText)) secureLockout(true);
+    throw new Error(errorText);
+  }
 }
 
 function toast(text) {
@@ -76,18 +79,35 @@ function applyResponse(response) {
   if (Array.isArray(response.links)) state.links = response.links;
   if (response.settings && typeof response.settings === 'object') state.settings = response.settings;
   if (response.storageStatus && typeof response.storageStatus === 'object') state.storageStatus = response.storageStatus;
+  if (response.githubSync && typeof response.githubSync === 'object') state.githubSync = response.githubSync;
   if (typeof response.adminUnlocked === 'boolean') state.adminUnlocked = response.adminUnlocked;
   renderStorageStatus();
 }
 
 function renderStorageStatus() {
   if (!elements.syncLabel) return;
+  const github = state.githubSync;
+  if (github?.pendingCount) {
+    elements.syncLabel.textContent = `${github.pendingCount} GitHub change${github.pendingCount === 1 ? '' : 's'} pending`;
+    elements.syncLabel.title = github.lastError || 'Automatic sync will retry shortly.';
+    return;
+  }
+  if (github?.lastError) {
+    elements.syncLabel.textContent = 'GitHub sync failed — local lists active';
+    elements.syncLabel.title = github.lastError;
+    return;
+  }
+  if (github?.lastSyncAt) {
+    elements.syncLabel.textContent = 'Local + GitHub lists synchronized';
+    elements.syncLabel.title = `${github.lastAction || 'GitHub sync'} — ${new Date(github.lastSyncAt).toLocaleString()}`;
+    return;
+  }
   if (state.storageStatus?.syncPending) {
-    elements.syncLabel.textContent = 'Saved locally — Chrome Sync pending';
-    elements.syncLabel.title = state.storageStatus.syncError || 'Chrome will retry profile synchronization.';
+    elements.syncLabel.textContent = 'Saved locally — browser profile mirror pending';
+    elements.syncLabel.title = state.storageStatus.syncError || 'The browser will retry its profile mirror.';
   } else {
-    elements.syncLabel.textContent = 'Saved locally + Chrome profile sync';
-    elements.syncLabel.title = 'The local mirror survives browser restarts; Chrome Sync carries the lists to your other signed-in browsers.';
+    elements.syncLabel.textContent = 'Local lists active — GitHub sync available';
+    elements.syncLabel.title = 'Open Sync to configure public GitHub blocklist synchronization.';
   }
 }
 
@@ -122,7 +142,7 @@ function renderList() {
         applyResponse(response);
         renderCounts();
         renderList();
-        toast('Entry removed and synced.');
+        toast('Entry removed; GitHub sync queued.');
       } catch (error) {
         if (!lockingOut) toast(error.message);
       }
@@ -159,14 +179,19 @@ function selectView(view) {
   if (!settings) renderList();
 }
 
-async function loadFragment(path) {
-  const response = await fetch(chrome.runtime.getURL(path), { cache: 'no-store' });
-  if (!response.ok) throw new Error(`Could not load ${path}.`);
-  return response.text();
+function getTemplate(id) {
+  const template = document.getElementById(id);
+  if (!(template instanceof HTMLTemplateElement)) {
+    throw new Error(`Missing UI template: ${id}`);
+  }
+  return template;
 }
 
-async function loadUiFragment() {
-  document.body.innerHTML = await loadFragment('blocker/manager-ui.html');
+function loadUiFragment() {
+  const app = document.getElementById('app');
+  if (!app) throw new Error('Missing manager UI.');
+  app.hidden = false;
+  document.getElementById('bootScreen')?.remove();
 }
 
 function setAdminLockedUi() {
@@ -215,14 +240,15 @@ async function renderAdminState() {
     return;
   }
   if (!elements.adminControlsMount.firstElementChild) {
-    elements.adminControlsMount.innerHTML = await loadFragment('blocker/admin-ui.html');
+    const content = getTemplate('adminUiTemplate').content.cloneNode(true);
+    elements.adminControlsMount.replaceChildren(content);
     bindAdminControls();
   }
   elements.adminLocked.hidden = true;
   setAdminDependentState();
 }
 
-async function saveAdminSettings(patch, successMessage = 'Settings saved and synced.') {
+async function saveAdminSettings(patch, successMessage = 'Settings saved.') {
   try {
     const response = await message({ type: MESSAGE.updateAdminSettings, patch }, { redirectOnLock: false });
     applyResponse(response);
@@ -244,31 +270,200 @@ function normalizedRedirectOrError(input, enabled) {
   return normalized;
 }
 
-async function runManualSync(button) {
-  const original = button.textContent;
-  button.disabled = true;
-  button.textContent = 'Syncing…';
+const GITHUB_DATA_COLLECTION = Object.freeze(['authenticationInfo', 'browsingActivity', 'searchTerms']);
+
+function syncStatusText(sync = state.githubSync) {
+  if (!sync) return 'GitHub sync has not been configured yet.';
+  const lines = [];
+  lines.push(`Sync Profile: ${sync.activeProfileLabel || sync.activeProfile || 'Haukkis'} (${sync.target?.files?.terms?.path?.split('/').pop() || 'blockedTerms.csv'})`);
+  if (sync.profileSwitchPending) lines.push(`Profile switch pending: local terms are still ${sync.termsProfileLabel || sync.termsProfile}; use manual Download or Upload to commit the switch.`);
+  lines.push(sync.autoSync ? 'Automatic Sync: enabled' : 'Automatic Sync: disabled');
+  lines.push(sync.hasToken ? 'GitHub token: saved locally' : 'GitHub token: not saved (downloads still work)');
+  lines.push(`Pending changes: ${Number(sync.pendingCount) || 0}`);
+  if (sync.lastSyncAt) lines.push(`Last sync: ${new Date(sync.lastSyncAt).toLocaleString()} — ${sync.lastAction || 'completed'}`);
+  else lines.push('Last sync: never');
+  if (sync.trustedSites) lines.push(`Trusted sites: ${sync.trustedSites.count || 0} (${sync.trustedSites.source || 'unknown'})`);
+  if (sync.suggestedProfileLabel) lines.push(`Detected browser account suggests ${sync.suggestedProfileLabel}.`);
+  if (sync.lastError) lines.push(`Last error: ${sync.lastError}`);
+  return lines.join('\n');
+}
+
+function renderGithubSyncDialogStatus(sync = state.githubSync) {
+  if (!elements.githubSyncStatus) return;
+  elements.githubSyncStatus.textContent = syncStatusText(sync);
+  elements.githubSyncStatus.dataset.state = sync?.lastError ? 'error' : sync?.lastSyncAt ? 'ok' : '';
+  renderStorageStatus();
+}
+
+async function refreshGithubSyncStatus() {
+  const response = await message({ type: MESSAGE.getGitHubSyncStatus });
+  applyResponse(response);
+  if (elements.automaticSyncToggle) elements.automaticSyncToggle.checked = response.githubSync.autoSync !== false;
+  if (elements.syncProfileSelect) elements.syncProfileSelect.value = response.githubSync.activeProfile || 'haukkis';
+  if (elements.detectedProfileStatus) {
+    if (response.githubSync.detectedEmail) {
+      const suggestion = response.githubSync.suggestedProfileLabel ? ` Suggested profile: ${response.githubSync.suggestedProfileLabel}.` : '';
+      elements.detectedProfileStatus.textContent = `Detected Chrome profile account: ${response.githubSync.detectedEmail}.${suggestion}`;
+    } else if (response.githubSync.detectionAvailable) {
+      elements.detectedProfileStatus.textContent = 'No recognized Chrome profile email was detected. Choose a Sync Profile manually.';
+    } else {
+      elements.detectedProfileStatus.textContent = 'Automatic email detection is unavailable on this browser; choose a Sync Profile manually.';
+    }
+  }
+  if (elements.githubTokenInput) {
+    elements.githubTokenInput.value = '';
+    elements.githubTokenInput.placeholder = response.githubSync.hasToken
+      ? 'A token is saved — leave blank to keep it'
+      : 'Token with repository Contents: read/write';
+  }
+  const files = response.githubSync.target?.files;
+  if (files?.terms?.rawUrl && elements.termsRawLink) elements.termsRawLink.href = files.terms.rawUrl;
+  if (files?.links?.rawUrl && elements.linksRawLink) elements.linksRawLink.href = files.links.rawUrl;
+  if (files?.trustedSites?.rawUrl && elements.trustedSitesRawLink) elements.trustedSitesRawLink.href = files.trustedSites.rawUrl;
+  if (files?.terms?.path && elements.termsRawLink) elements.termsRawLink.textContent = files.terms.path.split('/').pop();
+  renderGithubSyncDialogStatus(response.githubSync);
+  return response.githubSync;
+}
+
+async function ensureGithubUploadConsent() {
+  const manifest = browser.runtime.getManifest();
+  const isFirefox = Boolean(manifest?.browser_specific_settings?.gecko);
+  if (!isFirefox) return true;
+  const permissions = await browser.permissions.getAll();
+  const granted = new Set(Array.isArray(permissions.data_collection) ? permissions.data_collection : []);
+  if (GITHUB_DATA_COLLECTION.every(item => granted.has(item))) return true;
+  if (!Array.isArray(permissions.data_collection)) {
+    throw new Error('This Firefox version cannot request the required GitHub data-transmission consent.');
+  }
+  const accepted = await browser.permissions.request({ data_collection: [...GITHUB_DATA_COLLECTION] });
+  if (!accepted) throw new Error('GitHub upload consent was declined. Download-only sync remains available.');
+  return true;
+}
+
+async function saveGithubSettings({ requireConsent = false } = {}) {
+  const token = elements.githubTokenInput.value.trim();
+  const hasUsableToken = Boolean(token || state.githubSync?.hasToken);
+  if (requireConsent && !hasUsableToken) {
+    throw new Error('Enter a fine-grained GitHub token before uploading.');
+  }
+  if (requireConsent || (hasUsableToken && elements.automaticSyncToggle.checked)) await ensureGithubUploadConsent();
+  const requestedProfile = elements.syncProfileSelect?.value || state.githubSync?.activeProfile || 'haukkis';
+  const changingProfile = Boolean(state.githubSync?.activeProfile && requestedProfile !== state.githubSync.activeProfile);
+  let confirmProfileSwitch = false;
+  if (changingProfile) {
+    const from = state.githubSync.activeProfileLabel || state.githubSync.activeProfile;
+    const selected = state.githubSync.profiles?.find(item => item.id === requestedProfile);
+    const to = selected?.label || requestedProfile;
+    if (!window.confirm(`Switch Sync Profile from ${from} to ${to}?
+
+The current local terms will NOT be replaced now. Automatic term sync pauses until you manually choose Download from GitHub or Upload to GitHub.`)) {
+      elements.syncProfileSelect.value = state.githubSync.activeProfile;
+      throw new Error('Sync Profile change cancelled.');
+    }
+    confirmProfileSwitch = true;
+  }
+  const response = await message({
+    type: MESSAGE.saveGitHubSyncConfig,
+    autoSync: elements.automaticSyncToggle.checked,
+    token,
+    activeProfile: requestedProfile,
+    confirmProfileSwitch,
+    profileExplicit: true
+  });
+  applyResponse(response);
+  renderGithubSyncDialogStatus(response.githubSync);
+  elements.githubTokenInput.value = '';
+  elements.githubTokenInput.placeholder = response.githubSync.hasToken
+    ? 'A token is saved — leave blank to keep it'
+    : 'Token with repository Contents: read/write';
+  return response.githubSync;
+}
+
+async function openGithubSyncDialog() {
   try {
-    const response = await message({ type: MESSAGE.syncNow });
-    applyResponse(response);
-    renderCounts();
-    if (state.view !== 'settings') renderList();
-    if (state.view === 'settings') await renderAdminState();
-    toast(state.storageStatus?.syncPending ? 'Saved locally. Chrome profile sync is still pending.' : 'Manual Chrome profile sync completed.');
+    await refreshGithubSyncStatus();
+    if (!elements.syncDialog.open) elements.syncDialog.showModal();
   } catch (error) {
     if (!lockingOut) toast(error.message);
-  } finally {
-    button.disabled = false;
-    button.textContent = original || 'Sync now';
   }
 }
 
-function bindSyncButtons(root = document) {
-  root.querySelectorAll('[data-sync-now]').forEach(button => {
+async function runGithubAction(button, action) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = action === 'upload' ? 'Uploading…' : 'Downloading…';
+  try {
+    if (action === 'upload') {
+      await saveGithubSettings({ requireConsent: true });
+    } else if (!window.confirm(`Download ${state.githubSync?.activeProfileLabel || 'the selected profile'} terms plus the global links from GitHub and replace the current local lists?`)) {
+      return;
+    }
+
+    const response = await message({
+      type: action === 'upload' ? MESSAGE.uploadGitHubLists : MESSAGE.downloadGitHubLists
+    });
+    applyResponse(response);
+    renderCounts();
+    if (state.view !== 'settings') renderList();
+    renderGithubSyncDialogStatus(response.githubSync);
+    if (action === 'download' && response.usedBundledFallback) {
+      toast('GitHub was unavailable. Packaged fallback lists were loaded.');
+    } else {
+      toast(action === 'upload' ? 'Blocklists uploaded to GitHub.' : 'Blocklists downloaded from GitHub.');
+    }
+  } catch (error) {
+    renderGithubSyncDialogStatus({ ...(state.githubSync || {}), lastError: error.message });
+    if (!lockingOut) toast(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+function bindSyncOpeners(root = document) {
+  root.querySelectorAll('[data-open-sync-dialog]').forEach(button => {
     if (button.dataset.syncBound === 'true') return;
     button.dataset.syncBound = 'true';
-    button.addEventListener('click', () => void runManualSync(button));
+    button.addEventListener('click', () => void openGithubSyncDialog());
   });
+}
+
+function bindGithubSyncDialog() {
+  elements.closeSyncDialog.addEventListener('click', () => elements.syncDialog.close());
+  elements.syncDialog.addEventListener('click', event => {
+    if (event.target === elements.syncDialog) elements.syncDialog.close();
+  });
+  elements.saveGithubSyncSettings.addEventListener('click', async () => {
+    const original = elements.saveGithubSyncSettings.textContent;
+    elements.saveGithubSyncSettings.disabled = true;
+    elements.saveGithubSyncSettings.textContent = 'Saving…';
+    try {
+      await saveGithubSettings();
+      toast('GitHub sync settings saved.');
+    } catch (error) {
+      if (!lockingOut) toast(error.message);
+    } finally {
+      elements.saveGithubSyncSettings.disabled = false;
+      elements.saveGithubSyncSettings.textContent = original;
+    }
+  });
+  elements.clearGithubToken.addEventListener('click', async () => {
+    if (!window.confirm('Forget the GitHub token saved on this device?')) return;
+    try {
+      const response = await message({
+        type: MESSAGE.saveGitHubSyncConfig,
+        autoSync: elements.automaticSyncToggle.checked,
+        clearToken: true
+      });
+      applyResponse(response);
+      renderGithubSyncDialogStatus(response.githubSync);
+      elements.githubTokenInput.value = '';
+      elements.githubTokenInput.placeholder = 'Token with repository Contents: read/write';
+      toast('Saved GitHub token forgotten.');
+    } catch (error) { toast(error.message); }
+  });
+  elements.downloadFromGithub.addEventListener('click', () => void runGithubAction(elements.downloadFromGithub, 'download'));
+  elements.uploadToGithub.addEventListener('click', () => void runGithubAction(elements.uploadToGithub, 'upload'));
 }
 
 function bindAdminControls() {
@@ -288,12 +483,12 @@ function bindAdminControls() {
     const wasEnabled = Boolean(state.settings.enabled);
     if (wasEnabled && !requestedEnabled) {
       elements.enabledToggle.checked = true;
-      if (!window.confirm('Are you sure you want to disable Focus Master?')) return;
-      const saved = await saveAdminSettings({ enabled: false }, 'Focus Master disabled.');
+      if (!window.confirm('Are you sure you want to disable blocker?')) return;
+      const saved = await saveAdminSettings({ enabled: false }, 'Blocker disabled.');
       if (!saved) elements.enabledToggle.checked = true;
       return;
     }
-    await saveAdminSettings({ enabled: requestedEnabled }, requestedEnabled ? 'Focus Master enabled.' : 'Focus Master disabled.');
+    await saveAdminSettings({ enabled: requestedEnabled }, requestedEnabled ? 'Blocker enabled.' : 'Blocker disabled.');
   });
   elements.blockTermsToggle.addEventListener('change', () => void saveAdminSettings({ blockTerms: elements.blockTermsToggle.checked }));
   elements.blockLinksToggle.addEventListener('change', () => void saveAdminSettings({ blockLinks: elements.blockLinksToggle.checked }));
@@ -335,13 +530,13 @@ function bindAdminControls() {
   });
 
   elements.exportBackupButton.addEventListener('click', () => {
-    downloadText(`BraveFox-Focus-Master-Backup-${new Date().toISOString().slice(0, 10)}.json`, serializeFullBackup(state), 'application/json;charset=utf-8');
+    downloadText(`BraveFox-Blocker-Backup-${new Date().toISOString().slice(0, 10)}.json`, serializeFullBackup(state), 'application/json;charset=utf-8');
   });
   elements.exportTermsButton.addEventListener('click', () => {
-    downloadText('BraveFox-Focus-Master-Terms.csv', serializeListCsv(state.terms), 'text/csv;charset=utf-8');
+    downloadText('BraveFox-Blocker-Terms.csv', serializeListCsv(state.terms), 'text/csv;charset=utf-8');
   });
   elements.exportLinksButton.addEventListener('click', () => {
-    downloadText('BraveFox-Focus-Master-Links.csv', serializeListCsv(state.links), 'text/csv;charset=utf-8');
+    downloadText('BraveFox-Blocker-Links.csv', serializeListCsv(state.links), 'text/csv;charset=utf-8');
   });
   elements.importBackupButton.addEventListener('click', () => elements.backupInput.click());
   elements.backupInput.addEventListener('change', async () => {
@@ -370,7 +565,7 @@ function bindAdminControls() {
     } catch (error) { toast(error.message); }
   });
 
-  bindSyncButtons(elements.adminControls);
+  bindSyncOpeners(elements.adminControls);
 }
 
 function bind() {
@@ -381,7 +576,11 @@ function bind() {
     importButton: $('#importButton'), exportButton: $('#exportButton'), fileInput: $('#fileInput'), items: $('#items'), emptyState: $('#emptyState'),
     adminLocked: $('#adminLocked'), adminUnlockForm: $('#adminUnlockForm'), adminPasswordInput: $('#adminPasswordInput'),
     adminUnlockButton: $('#adminUnlockButton'), adminError: $('#adminError'), adminControlsMount: $('#adminControlsMount'),
-    lockButton: $('#lockButton'), toast: $('#toast'), syncLabel: $('#syncLabel')
+    lockButton: $('#lockButton'), toast: $('#toast'), syncLabel: $('#syncLabel'), syncDialog: $('#syncDialog'),
+    closeSyncDialog: $('#closeSyncDialog'), githubTokenInput: $('#githubTokenInput'), automaticSyncToggle: $('#automaticSyncToggle'),
+    clearGithubToken: $('#clearGithubToken'), githubSyncStatus: $('#githubSyncStatus'), termsRawLink: $('#termsRawLink'), linksRawLink: $('#linksRawLink'),
+    trustedSitesRawLink: $('#trustedSitesRawLink'), syncProfileSelect: $('#syncProfileSelect'), syncProfileHelp: $('#syncProfileHelp'), detectedProfileStatus: $('#detectedProfileStatus'),
+    saveGithubSyncSettings: $('#saveGithubSyncSettings'), downloadFromGithub: $('#downloadFromGithub'), uploadToGithub: $('#uploadToGithub')
   });
 
   document.querySelectorAll('.nav-button').forEach(button => button.addEventListener('click', () => selectView(button.dataset.view)));
@@ -396,7 +595,7 @@ function bind() {
       elements.addInput.value = '';
       renderCounts();
       renderList();
-      toast('Entry appended and synced.');
+      toast('Entry appended; GitHub sync queued.');
     } catch (error) { if (!lockingOut) toast(error.message); }
   });
   elements.addInput.addEventListener('keydown', event => { if (event.key === 'Enter') elements.addButton.click(); });
@@ -414,11 +613,11 @@ function bind() {
       applyResponse(response);
       renderCounts();
       renderList();
-      toast(`${values.length} ordered entries imported and synced.`);
+      toast(`${values.length} ordered entries imported; GitHub sync queued.`);
     } catch (error) { if (!lockingOut) toast(error.message); }
   });
   elements.exportButton.addEventListener('click', () => {
-    const name = state.view === 'terms' ? 'BraveFox-Focus-Master-Terms.csv' : 'BraveFox-Focus-Master-Links.csv';
+    const name = state.view === 'terms' ? 'BraveFox-Blocker-Terms.csv' : 'BraveFox-Blocker-Links.csv';
     downloadText(name, serializeListCsv(currentValues()), 'text/csv;charset=utf-8');
   });
 
@@ -444,7 +643,8 @@ function bind() {
   });
 
 
-  bindSyncButtons(document);
+  bindSyncOpeners(document);
+  bindGithubSyncDialog();
 
   elements.lockButton.addEventListener('click', async () => {
     try {
@@ -477,7 +677,7 @@ function startAccessWatcher() {
 }
 
 async function start() {
-  if (chrome.extension?.inIncognitoContext) {
+  if (browser.extension?.inIncognitoContext) {
     location.replace('incognito-denied.html');
     return;
   }

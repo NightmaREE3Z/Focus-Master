@@ -85,3 +85,87 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
   .settings-lock-card { grid-template-columns: 1fr; }
   .redirect-row { grid-template-columns: 1fr; }
 }
+
+/* Firefox Android manager layout — selected by platform, not viewport width. */
+html[data-platform="android"] body { min-width: 0; min-height: 100vh; }
+html[data-platform="android"] .app { display: block; }
+html[data-platform="android"] .sidebar { position: sticky; top: 0; z-index: 5; padding: 12px; gap: 10px; }
+html[data-platform="android"] .brand { padding: 0 2px 8px; }
+html[data-platform="android"] .brand-icon { width: 34px; height: 34px; }
+html[data-platform="android"] .brand strong { font-size: 16px; }
+html[data-platform="android"] .brand span { font-size: 12px; }
+html[data-platform="android"] .sidebar nav { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+html[data-platform="android"] .nav-button { padding: 10px 8px; justify-content: center; gap: 6px; text-align: center; font-size: 13px; }
+html[data-platform="android"] .nav-button span { padding: 1px 6px; }
+html[data-platform="android"] .sidebar-footer { margin-top: 0; padding: 2px 0 0; grid-template-columns: 1fr 1fr; gap: 7px; }
+html[data-platform="android"] .sidebar-footer > span { grid-column: 1 / -1; text-align: center; }
+html[data-platform="android"] .ghost-button { padding: 9px 8px; }
+html[data-platform="android"] .main { padding: 14px; }
+html[data-platform="android"] .topbar { min-height: 0; margin-bottom: 14px; }
+html[data-platform="android"] h1 { font-size: 24px; }
+html[data-platform="android"] .panel,
+html[data-platform="android"] .setting-card { border-radius: 14px; padding: 14px; }
+html[data-platform="android"] .add-row,
+html[data-platform="android"] .toolbar,
+html[data-platform="android"] .password-row,
+html[data-platform="android"] .redirect-row { grid-template-columns: 1fr; }
+html[data-platform="android"] .toolbar { gap: 8px; }
+html[data-platform="android"] .toolbar select { grid-column: auto; }
+html[data-platform="android"] .items { max-height: none; }
+html[data-platform="android"] .item { align-items: start; }
+html[data-platform="android"] .settings-lock-card { min-height: 0; grid-template-columns: 1fr; padding: 20px 16px; text-align: center; }
+html[data-platform="android"] .settings-lock-icon { margin: 0 auto; }
+html[data-platform="android"] .settings-lock-copy h2 { font-size: 23px; }
+html[data-platform="android"] .admin-master-row,
+html[data-platform="android"] .settings-unlocked-bar { align-items: stretch; flex-direction: column; }
+html[data-platform="android"] .master-toggle { justify-content: center; white-space: normal; }
+html[data-platform="android"] .button-row { display: grid; grid-template-columns: 1fr; }
+html[data-platform="android"] .toast { left: 14px; right: 14px; bottom: 14px; text-align: center; }
+
+/* Shared GitHub sync dialog for Firefox PC and Fenix. */
+.sync-dialog {
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(86vh, 820px);
+  padding: 0;
+  border: 0;
+  border-radius: 18px;
+  color: #172033;
+  background: #fff;
+  box-shadow: 0 28px 80px rgba(15, 23, 42, .30);
+}
+.sync-dialog::backdrop { background: rgba(15, 23, 42, .55); backdrop-filter: blur(3px); }
+.sync-dialog-shell { display: grid; gap: 0; max-height: inherit; overflow: auto; }
+.sync-dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 22px 24px 18px; border-bottom: 1px solid #e8ecf3; }
+.sync-dialog-header h2 { margin: 0 0 6px; font-size: 25px; }
+.sync-dialog-header p { margin: 0; color: #6b7280; line-height: 1.45; }
+.dialog-close { flex: 0 0 auto; width: 38px; height: 38px; display: grid; place-items: center; border: 0; border-radius: 10px; background: #f1f4f9; color: #475569; font-size: 27px; line-height: 1; }
+.dialog-close:hover { background: #e7ebf2; }
+.sync-dialog-section { display: grid; gap: 10px; padding: 18px 24px; border-bottom: 1px solid #edf0f5; }
+.sync-dialog-section h3 { margin: 0; font-size: 17px; }
+.sync-dialog-section p { margin: 0; color: #6b7280; line-height: 1.45; }
+.sync-link-list { display: grid; gap: 7px; }
+.sync-link-list a { color: #365dd5; overflow-wrap: anywhere; }
+.field-label { font-weight: 800; }
+.field-help { font-size: 12px; }
+.sync-auto-line { margin-top: 4px; font-weight: 800; }
+.danger-lite { justify-self: start; color: #a52a38; background: #fff0f2; }
+.danger-lite:hover { background: #ffe2e6; }
+.sync-status-section { background: #f8fafc; }
+.github-sync-status { min-height: 42px; white-space: pre-line; }
+.github-sync-status[data-state="error"] { color: #b42332; }
+.github-sync-status[data-state="ok"] { color: #166534; }
+.sync-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; padding: 18px 24px 22px; }
+.enhancer-version { margin-top: 14px !important; }
+
+html[data-platform="android"] .sync-dialog {
+  width: calc(100vw - 20px);
+  max-height: calc(100vh - 24px);
+  border-radius: 16px;
+}
+html[data-platform="android"] .sync-dialog-header,
+html[data-platform="android"] .sync-dialog-section,
+html[data-platform="android"] .sync-dialog-actions { padding-left: 16px; padding-right: 16px; }
+html[data-platform="android"] .sync-dialog-actions { display: grid; grid-template-columns: 1fr; }
+html[data-platform="android"] .sync-dialog-actions button { min-height: 46px; }
+
+.sync-dialog select { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid #cfd7e6; border-radius: 10px; background: #fff; color: #172033; font: inherit; }

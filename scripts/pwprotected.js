@@ -111,6 +111,7 @@
         background: #2563eb;
         color: #fff;
       }
+      .bf-version { margin-top: 20px; text-align: center; color: #94a3b8; font-size: 12px; font-weight: 700; }
       .bf-error {
         margin-top: 10px;
         color: #b91c1c;
@@ -213,8 +214,21 @@
     form.appendChild(inputRow);
     form.appendChild(error);
 
+    const version = document.createElement('div');
+    version.className = 'bf-version';
+    try {
+      const api = globalThis.browser ?? globalThis.chrome;
+      const installedVersion = api?.runtime?.getManifest?.().version || '';
+      version.textContent = installedVersion
+        ? `Via BraveFox Enhancer v${installedVersion}`
+        : 'Powered by BraveFox Enhancer';
+    } catch {
+      version.textContent = 'Powered by BraveFox Enhancer';
+    }
+
     card.appendChild(title);
     card.appendChild(form);
+    card.appendChild(version);
 
     container.appendChild(card);
 

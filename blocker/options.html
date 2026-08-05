@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="platform-ui.js"></script>
+  <title>BraveFox Focus Master</title>
+  <link rel="stylesheet" href="popup.css">
+  <style>
+    html, body {
+      width: 100%;
+      min-height: 100%;
+    }
+
+    body {
+      display: block;
+      overflow: auto;
+      padding: 18px 12px 36px;
+      background: #f5f7fb;
+    }
+
+    .popup-shell {
+      width: min(100%, 520px);
+      min-height: 0;
+      margin: 0 auto;
+      overflow: hidden;
+      border: 1px solid #e1e6ef;
+      border-radius: 18px;
+      background: #fff;
+      box-shadow: 0 15px 45px rgba(23, 32, 51, .10);
+    }
+
+    .settings-stack {
+      display: grid;
+      gap: 14px;
+      padding: 14px;
+    }
+
+    .quick-card,
+    .lock-panel {
+      border: 1px solid #e1e6ef;
+      border-radius: 15px;
+      background: #fff;
+    }
+
+    .quick-toggle {
+      width: 100%;
+      min-height: 68px;
+      display: grid;
+      grid-template-columns: 44px 1fr 24px;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      color: #172033;
+      text-align: left;
+    }
+
+    .quick-toggle:hover,
+    .quick-toggle:focus-visible {
+      color: #172033;
+      background: #f8faff;
+    }
+
+    .quick-icon {
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      border-radius: 13px;
+      background: #83dfc3;
+      color: #0c604a;
+      font-size: 25px;
+      font-weight: 900;
+    }
+
+    .quick-heading {
+      display: grid;
+      gap: 3px;
+    }
+
+    .quick-heading strong {
+      font-size: 16px;
+    }
+
+    .quick-heading small {
+      color: #747f91;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .quick-chevron {
+      font-size: 24px;
+      line-height: 1;
+      transform: rotate(90deg);
+      transition: transform 160ms ease;
+    }
+
+    .quick-toggle[aria-expanded="true"] .quick-chevron {
+      transform: rotate(-90deg);
+    }
+
+    .quick-panel {
+      padding: 0 14px 15px;
+      border-top: 1px solid #edf0f5;
+    }
+
+    .quick-panel[hidden] {
+      display: none;
+    }
+
+    .kind-switcher {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin: 14px 0 12px;
+      padding: 4px;
+      border-radius: 12px;
+      background: #eef2f8;
+    }
+
+    .kind-button {
+      min-height: 42px;
+      border-radius: 9px;
+      color: #5d6879;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .kind-button[aria-selected="true"] {
+      background: #fff;
+      color: #246be8;
+      box-shadow: 0 2px 8px rgba(23, 32, 51, .10);
+    }
+
+    .quick-form {
+      width: 100%;
+      margin: 0;
+    }
+
+    .quick-form label {
+      display: block;
+      margin-bottom: 7px;
+      color: #394457;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .quick-input-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+    }
+
+    .quick-input-row input {
+      width: 100%;
+      min-width: 0;
+      border: 1.5px solid #cbd4e2;
+      border-radius: 10px;
+      padding: 12px;
+      font-size: 14px;
+    }
+
+    .quick-input-row input:focus {
+      border-color: #4388ff;
+      box-shadow: 0 0 0 3px rgba(67, 136, 255, .12);
+    }
+
+    .quick-submit {
+      min-width: 78px;
+      border-radius: 10px;
+      padding: 0 15px;
+      background: #4388ff;
+      color: #fff;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    .quick-submit:hover,
+    .quick-submit:focus-visible {
+      color: #fff;
+      background: #2f73e9;
+    }
+
+    .quick-help,
+    .quick-status {
+      margin: 8px 2px 0;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .quick-help {
+      color: #8993a3;
+    }
+
+    .quick-status {
+      min-height: 16px;
+      color: #167257;
+      font-weight: 700;
+    }
+
+    .quick-status[data-state="error"] {
+      color: #c83e48;
+    }
+
+    .lock-panel {
+      padding: 28px 24px 22px;
+    }
+
+    .lock-disc {
+      width: 72px;
+      height: 72px;
+    }
+
+    .lock-disc svg {
+      width: 34px;
+      height: 34px;
+    }
+
+    .lock-panel > p {
+      max-width: 330px;
+    }
+
+    .options-note {
+      margin: 14px 0 0;
+      font-size: .9rem;
+      opacity: .8;
+      text-align: center;
+    }
+
+
+    html[data-platform="desktop"] .popup-shell {
+      width: min(100%, 920px);
+    }
+
+    html[data-platform="desktop"] .settings-stack {
+      grid-template-columns: minmax(0, 1.15fr) minmax(320px, .85fr);
+      align-items: start;
+      gap: 18px;
+      padding: 20px;
+    }
+
+    html[data-platform="desktop"] .quick-card,
+    html[data-platform="desktop"] .lock-panel {
+      min-width: 0;
+    }
+
+    html[data-platform="desktop"] .lock-panel {
+      position: sticky;
+      top: 18px;
+    }
+
+    html[data-platform="android"] .popup-shell {
+      width: min(100%, 520px);
+    }
+
+    html[data-platform="android"] .settings-stack {
+      grid-template-columns: 1fr;
+    }
+
+    @media (max-width: 380px) {
+      html[data-platform="android"] body { padding: 0; background: #fff; }
+      html[data-platform="android"] .popup-shell { border: 0; border-radius: 0; box-shadow: none; }
+      html[data-platform="android"] .settings-stack { padding: 12px; }
+      html[data-platform="android"] .quick-input-row { grid-template-columns: 1fr; }
+      html[data-platform="android"] .quick-submit { min-height: 44px; }
+    }
+  </style>
+</head>
+<body data-page="options" data-bravefox-launcher="options">
+  <main class="popup-shell">
+    <header class="topbar">
+      <div class="brand">
+        <img src="../icons/icon48.png" alt="" class="brand-icon">
+        <div><strong>BraveFox</strong><span>Focus Master</span></div>
+      </div>
+      <span class="status-pill" title="Blocking remains active while the manager is locked">✓</span>
+    </header>
+
+    <div class="settings-stack">
+      <section class="quick-card" aria-labelledby="quickBlockTitle">
+        <button id="quickToggle" class="quick-toggle" type="button" aria-expanded="false" aria-controls="quickPanel">
+          <span class="quick-icon" aria-hidden="true">+</span>
+          <span class="quick-heading">
+            <strong id="quickBlockTitle">Quick Block</strong>
+            <small>Add one term or link without unlocking the manager.</small>
+          </span>
+          <span class="quick-chevron" aria-hidden="true">›</span>
+        </button>
+
+        <div id="quickPanel" class="quick-panel" hidden>
+          <div class="kind-switcher" role="tablist" aria-label="Quick Block type">
+            <button id="termKindButton" class="kind-button" type="button" role="tab" aria-selected="true" data-kind="terms">Add Term</button>
+            <button id="linkKindButton" class="kind-button" type="button" role="tab" aria-selected="false" data-kind="links">Add Link</button>
+          </div>
+
+          <form id="quickForm" class="quick-form" autocomplete="off" spellcheck="false">
+            <label id="quickLabel" for="quickInput">Term to block</label>
+            <div class="quick-input-row">
+              <input id="quickInput" type="text" inputmode="text" placeholder="Enter a word or phrase" aria-describedby="quickHelp quickStatus">
+              <button id="quickSubmit" class="quick-submit" type="submit">Add</button>
+            </div>
+            <p id="quickHelp" class="quick-help">The term is normalized and appended to the blocked-terms list.</p>
+            <p id="quickStatus" class="quick-status" aria-live="polite"></p>
+          </form>
+        </div>
+      </section>
+
+      <section class="lock-panel" aria-labelledby="popupTitle">
+        <div class="lock-disc" aria-hidden="true">
+          <svg viewBox="0 0 24 24" role="img">
+            <path d="M7 10V7a5 5 0 0 1 10 0v3h1a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h1zm2 0h6V7a3 3 0 0 0-6 0v3z"/>
+          </svg>
+        </div>
+        <h1 id="popupTitle">BraveFox Focus Master is locked</h1>
+        <p>Lists, removals, imports, exports, GitHub sync and settings remain password-protected.</p>
+
+        <form id="unlockForm" autocomplete="off" spellcheck="false">
+          <div class="input-row">
+            <input id="passwordInput" type="password" autocomplete="off" placeholder="Enter password" aria-label="Enter password">
+            <button id="unlockButton" type="submit" aria-label="Continue">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l7 7-7 7"/></svg>
+            </button>
+          </div>
+          <p id="errorText" class="error" aria-live="polite"></p>
+        </form>
+
+        <p class="hint">You can also open this password launcher from the browser’s Extensions menu.</p>
+        <p id="enhancerVersion" class="options-note">Via BraveFox Enhancer</p>
+      </section>
+    </div>
+  </main>
+  <script type="module" src="popup.js"></script>
+  <script type="module" src="options.js"></script>
+</body>
+</html>

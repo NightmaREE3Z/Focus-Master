@@ -1,15 +1,68 @@
+import { browser } from './api.js';
 import {
   DATASET_PREFIX,
   DEFAULT_SETTINGS,
   MAX_CHUNK_BYTES,
   STORAGE_KEYS
 } from './constants.js';
+import { parseListText } from './csv.js';
 import {
   normalizeLinkForStorage,
   normalizeRedirectUrl,
   normalizeTerm,
   uniqueInOrder
 } from './shared.js';
+
+
+const GITHUB_CONFIG_KEY = 'bfb:github-sync-config';
+const VALID_PROFILES = new Set(['haukkis', 'tapsa']);
+const REMOTE_BASE = 'https://raw.githubusercontent.com/NightmaREE3Z/Focus-Master/refs/heads/BraveFox/blocker/lists/';
+
+function normalizeProfileId(value) { return VALID_PROFILES.has(value) ? value : 'haukkis'; }
+function termsFilename(profileId) { return normalizeProfileId(profileId) === 'tapsa' ? 'blockedTermsDad.csv' : 'blockedTerms.csv'; }
+
+async function readConfiguredProfileId() {
+  try {
+    const result = await browser.storage.local.get(GITHUB_CONFIG_KEY);
+    return normalizeProfileId(result[GITHUB_CONFIG_KEY]?.activeProfile);
+  } catch { return 'haukkis'; }
+}
+
+export async function loadBundledFallbackLists(profileId = 'haukkis') {
+  const termFile = termsFilename(profileId);
+  const [termsResponse, linksResponse] = await Promise.all([
+    fetch(browser.runtime.getURL(`blocker/lists/${termFile}`), { cache: 'no-store' }),
+    fetch(browser.runtime.getURL('blocker/lists/blockedLinks.csv'), { cache: 'no-store' })
+  ]);
+  if (!termsResponse.ok || !linksResponse.ok) throw new Error('Bundled BraveFox Focus Master lists could not be loaded.');
+  const [termsText, linksText] = await Promise.all([termsResponse.text(), linksResponse.text()]);
+  return { terms: parseListText(termsText, 'terms'), links: parseListText(linksText, 'links'), profile: normalizeProfileId(profileId) };
+}
+
+async function fetchRemoteList(kind, profileId) {
+  const filename = kind === 'terms' ? termsFilename(profileId) : 'blockedLinks.csv';
+  const url = `${REMOTE_BASE}${filename}`;
+  const response = await fetch(`${url}?bravefox_refresh=${Date.now()}`, {
+    cache: 'no-store', credentials: 'omit', headers: { Accept: 'text/plain' }
+  });
+  if (!response.ok) throw new Error(`Remote Focus Master ${kind} list failed (HTTP ${response.status}).`);
+  return parseListText(await response.text(), kind);
+}
+
+export async function loadRemoteFirstLists(profileId = null) {
+  const profile = normalizeProfileId(profileId || await readConfiguredProfileId());
+  const results = await Promise.allSettled([fetchRemoteList('terms', profile), fetchRemoteList('links', profile)]);
+  let terms = results[0].status === 'fulfilled' ? results[0].value : null;
+  let links = results[1].status === 'fulfilled' ? results[1].value : null;
+  let usedBundledFallback = false;
+  if (terms === null || links === null) {
+    const bundled = await loadBundledFallbackLists(profile);
+    if (terms === null) terms = bundled.terms;
+    if (links === null) links = bundled.links;
+    usedBundledFallback = true;
+  }
+  return { terms, links, profile, usedBundledFallback };
+}
 
 const encoder = new TextEncoder();
 let cachedDataset = null;
@@ -53,11 +106,13 @@ function normalizeDatasetSnapshot(value) {
   const links = uniqueInOrder(value.links, normalizeLinkForStorage);
   const updatedAt = Number(value.updatedAt) || 0;
   const revision = String(value.revision || '');
+  const profile = normalizeProfileId(value.profile);
   if (!revision && !terms.length && !links.length && !updatedAt) return null;
   return {
     terms,
     links,
     revision,
+    profile,
     updatedAt,
     syncPending: Boolean(value.syncPending),
     syncError: String(value.syncError || '')
@@ -65,14 +120,14 @@ function normalizeDatasetSnapshot(value) {
 }
 
 async function readLocalDataset() {
-  const result = await chrome.storage.local.get(STORAGE_KEYS.localDataset);
+  const result = await browser.storage.local.get(STORAGE_KEYS.localDataset);
   return normalizeDatasetSnapshot(result[STORAGE_KEYS.localDataset]);
 }
 
 async function writeLocalDataset(snapshot, patch = {}) {
   const normalized = normalizeDatasetSnapshot({ ...snapshot, ...patch });
   if (!normalized) return;
-  await chrome.storage.local.set({ [STORAGE_KEYS.localDataset]: normalized });
+  await browser.storage.local.set({ [STORAGE_KEYS.localDataset]: normalized });
 }
 
 async function readSyncVersion(version) {
@@ -81,7 +136,7 @@ async function readSyncVersion(version) {
   for (let i = 0; i < Number(version.termChunks || 0); i += 1) keys.push(revisionKey(version.revision, 'terms', i));
   for (let i = 0; i < Number(version.linkChunks || 0); i += 1) keys.push(revisionKey(version.revision, 'links', i));
 
-  const values = await chrome.storage.sync.get(keys);
+  const values = await browser.storage.sync.get(keys);
   const terms = [];
   const links = [];
 
@@ -100,6 +155,7 @@ async function readSyncVersion(version) {
     terms,
     links,
     revision: version.revision,
+    profile: normalizeProfileId(version.profile),
     updatedAt: version.updatedAt || 0,
     syncPending: false,
     syncError: ''
@@ -107,7 +163,7 @@ async function readSyncVersion(version) {
 }
 
 async function readSyncDataset() {
-  const result = await chrome.storage.sync.get(STORAGE_KEYS.datasetMeta);
+  const result = await browser.storage.sync.get(STORAGE_KEYS.datasetMeta);
   const meta = result[STORAGE_KEYS.datasetMeta] || { versions: [] };
   for (const version of Array.isArray(meta.versions) ? meta.versions : []) {
     const dataset = await readSyncVersion(version);
@@ -130,12 +186,13 @@ async function writeSyncDataset(snapshot) {
     chunkPayload[revisionKey(clean.revision, 'links', index)] = chunk;
   });
 
-  await chrome.storage.sync.set(chunkPayload);
+  await browser.storage.sync.set(chunkPayload);
 
-  const oldResult = await chrome.storage.sync.get(STORAGE_KEYS.datasetMeta);
+  const oldResult = await browser.storage.sync.get(STORAGE_KEYS.datasetMeta);
   const oldMeta = oldResult[STORAGE_KEYS.datasetMeta] || { versions: [] };
   const currentVersion = {
     revision: clean.revision,
+    profile: clean.profile,
     termChunks: termChunks.length,
     linkChunks: linkChunks.length,
     termCount: clean.terms.length,
@@ -146,7 +203,7 @@ async function writeSyncDataset(snapshot) {
     .filter(item => item?.revision && item.revision !== clean.revision)
     .slice(0, 1);
   const nextMeta = { schema: 2, versions: [currentVersion, ...previous] };
-  await chrome.storage.sync.set({ [STORAGE_KEYS.datasetMeta]: nextMeta });
+  await browser.storage.sync.set({ [STORAGE_KEYS.datasetMeta]: nextMeta });
 
   // Verify that Chrome accepted the metadata and every current chunk.
   const verified = await readSyncVersion(currentVersion);
@@ -155,20 +212,22 @@ async function writeSyncDataset(snapshot) {
     throw new Error('Chrome Sync verification failed after saving the blocklists.');
   }
 
-  const all = await chrome.storage.sync.get(null);
+  const all = await browser.storage.sync.get(null);
   const keepRevisions = new Set(nextMeta.versions.map(item => item.revision));
   const staleKeys = Object.keys(all).filter(key => {
     if (!key.startsWith(DATASET_PREFIX)) return false;
     const revisionPart = key.slice(DATASET_PREFIX.length).split(':')[0];
     return revisionPart && !keepRevisions.has(revisionPart);
   });
-  if (staleKeys.length) await chrome.storage.sync.remove(staleKeys);
+  if (staleKeys.length) await browser.storage.sync.remove(staleKeys);
   return verified;
 }
 
 function chooseNewest(local, synced) {
   if (!local) return synced;
   if (!synced) return local;
+  // Never let a profile-sync snapshot for Haukkis replace a local Tapsa list, or vice versa.
+  if (local.profile !== synced.profile) return local;
   if (local.updatedAt > synced.updatedAt) return local;
   if (synced.updatedAt > local.updatedAt) return synced;
   if (local.revision === synced.revision) return local;
@@ -198,22 +257,39 @@ function scheduleDatasetRepair(snapshot) {
 export async function loadDataset({ force = false } = {}) {
   if (!force && cachedDataset) return cachedDataset;
 
-  const [local, synced] = await Promise.all([
+  const [local, synced, activeProfile] = await Promise.all([
     readLocalDataset(),
-    readSyncDataset().catch(() => null)
+    readSyncDataset().catch(() => null),
+    readConfiguredProfileId()
   ]);
-  const chosen = chooseNewest(local, synced) || {
-    terms: [],
-    links: [],
-    revision: '',
-    updatedAt: 0,
-    syncPending: false,
-    syncError: ''
-  };
+  // A fresh install must not inherit the other person's terms merely because
+  // browser profile-sync happened to contain a snapshot from that profile.
+  const usableSynced = (!local && synced?.profile !== activeProfile) ? null : synced;
+  let chosen = chooseNewest(local, usableSynced);
+  if (!chosen) {
+    try {
+      const initial = await loadRemoteFirstLists(activeProfile);
+      chosen = await saveDataset({ terms: initial.terms, links: initial.links, profile: initial.profile });
+      if (initial.usedBundledFallback) {
+        console.warn('[BraveFox Focus Master] One or more remote lists failed; bundled fallback data was used.');
+      }
+    } catch (error) {
+      console.warn('[BraveFox Focus Master] Remote and bundled initial list loading failed:', error);
+      chosen = {
+        terms: [],
+        links: [],
+        revision: '',
+        profile: activeProfile,
+        updatedAt: 0,
+        syncPending: false,
+        syncError: String(error?.message || error)
+      };
+    }
+  }
 
-  if (synced && (!local || synced.updatedAt > local.updatedAt || synced.revision !== local.revision)) {
-    await writeLocalDataset(synced, { syncPending: false, syncError: '' });
-  } else if (local && (!synced || local.updatedAt > synced.updatedAt || local.syncPending)) {
+  if (usableSynced && (!local || usableSynced.updatedAt > local.updatedAt || usableSynced.revision !== local.revision) && (!local || usableSynced.profile === local.profile)) {
+    await writeLocalDataset(usableSynced, { syncPending: false, syncError: '' });
+  } else if (local && (!usableSynced || local.updatedAt > usableSynced.updatedAt || local.syncPending)) {
     scheduleDatasetRepair(local);
   }
 
@@ -221,10 +297,13 @@ export async function loadDataset({ force = false } = {}) {
   return cachedDataset;
 }
 
-export async function saveDataset({ terms, links }) {
+export async function saveDataset({ terms, links, profile = '' }) {
+  const existing = await readLocalDataset();
+  const snapshotProfile = normalizeProfileId(profile || existing?.profile || await readConfiguredProfileId());
   const snapshot = {
     terms: uniqueInOrder(terms, normalizeTerm),
     links: uniqueInOrder(links, normalizeLinkForStorage),
+    profile: snapshotProfile,
     revision: makeRevision(),
     updatedAt: Date.now(),
     syncPending: true,
@@ -287,7 +366,7 @@ function normalizeSettingsRecord(value, fallbackUpdatedAt = 0) {
 }
 
 async function writeSettingsLocal(record) {
-  await chrome.storage.local.set({ [STORAGE_KEYS.localSettings]: record });
+  await browser.storage.local.set({ [STORAGE_KEYS.localSettings]: record });
 }
 
 function scheduleSettingsRepair(record) {
@@ -295,7 +374,7 @@ function scheduleSettingsRepair(record) {
   settingsRepairPromise = (async () => {
     try {
       const clean = { value: record.value, updatedAt: record.updatedAt };
-      await chrome.storage.sync.set({ [STORAGE_KEYS.settings]: clean });
+      await browser.storage.sync.set({ [STORAGE_KEYS.settings]: clean });
       await writeSettingsLocal({ ...clean, syncPending: false, syncError: '' });
     } catch (error) {
       await writeSettingsLocal({
@@ -311,8 +390,8 @@ function scheduleSettingsRepair(record) {
 
 export async function getSettings() {
   const [localResult, syncResult] = await Promise.all([
-    chrome.storage.local.get(STORAGE_KEYS.localSettings),
-    chrome.storage.sync.get(STORAGE_KEYS.settings).catch(() => ({}))
+    browser.storage.local.get(STORAGE_KEYS.localSettings),
+    browser.storage.sync.get(STORAGE_KEYS.settings).catch(() => ({}))
   ]);
   const local = normalizeSettingsRecord(localResult[STORAGE_KEYS.localSettings]);
   const synced = normalizeSettingsRecord(syncResult[STORAGE_KEYS.settings]);
@@ -345,7 +424,7 @@ export async function updateSettings(patch) {
   await writeSettingsLocal(record);
   try {
     const clean = { value: next, updatedAt: record.updatedAt };
-    await chrome.storage.sync.set({ [STORAGE_KEYS.settings]: clean });
+    await browser.storage.sync.set({ [STORAGE_KEYS.settings]: clean });
     await writeSettingsLocal({ ...clean, syncPending: false, syncError: '' });
   } catch (error) {
     const pending = { ...record, syncError: String(error?.message || error) };
@@ -373,7 +452,8 @@ export async function synchronizeNow() {
   if (!currentDataset.revision) {
     dataset = await saveDataset({
       terms: currentDataset.terms,
-      links: currentDataset.links
+      links: currentDataset.links,
+      profile: currentDataset.profile
     });
   } else {
     try {

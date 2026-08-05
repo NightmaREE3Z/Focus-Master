@@ -3,10 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="platform-ui.js"></script>
   <title>BraveFox Focus Master</title>
   <link rel="stylesheet" href="popup.css">
 </head>
-<body>
+<body data-page="popup">
   <main class="popup-shell">
     <header class="topbar">
       <div class="brand">
@@ -23,7 +24,7 @@
         </svg>
       </div>
       <h1 id="popupTitle">BraveFox Focus Master is locked</h1>
-      <p>Enter the BraveFox password to open the manager for its configured unlock period.</p>
+      <p>Enter the BraveFox password to open Focus Master for its configured unlock period.</p>
 
       <form id="unlockForm" autocomplete="off" spellcheck="false">
         <div class="input-row">
@@ -35,7 +36,9 @@
         <p id="errorText" class="error" aria-live="polite"></p>
       </form>
 
-      <p class="hint">The native internal password prompt appears only after the unlock period expires.</p>
+      <p class="hint">The full-page password prompt appears only after the unlock period expires.</p>
+      <button id="openQuickBlock" class="quick-block-link" type="button">Open Quick Block / Settings</button>
+      <p id="enhancerVersion" class="hint enhancer-version">Via BraveFox Enhancer</p>
     </section>
   </main>
   <script type="module" src="popup.js"></script>
