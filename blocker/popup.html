@@ -38,7 +38,11 @@
 
       <p class="hint">The full-page password prompt appears only after the unlock period expires.</p>
       <button id="openQuickBlock" class="quick-block-link" type="button">Open Quick Block / Settings</button>
-      <p id="enhancerVersion" class="hint enhancer-version">Via BraveFox Enhancer</p>
+      <section id="extensionUpdateArea" class="extension-update-area" aria-label="Extension updates">
+        <button id="checkExtensionUpdate" class="extension-update-button" type="button">Check for updates</button>
+        <p id="extensionUpdateStatus" class="extension-update-status" role="status" aria-live="polite"></p>
+      </section>
+      <p id="enhancerVersion" class="hint enhancer-version">BraveFox Focus Master</p>
     </section>
   </main>
   <script type="module" src="popup.js"></script>

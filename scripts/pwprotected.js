@@ -111,7 +111,39 @@
         background: #2563eb;
         color: #fff;
       }
-      .bf-version { margin-top: 20px; text-align: center; color: #94a3b8; font-size: 12px; font-weight: 700; }
+      .bf-update-area {
+        margin-top: 18px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+      }
+      .bf-update-btn {
+        appearance: none;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        background: #f8fafc;
+        color: #1d4ed8;
+        min-height: 42px;
+        padding: 9px 16px;
+        font: inherit;
+        font-size: 14px;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      .bf-update-btn:hover { background: #f1f5f9; }
+      .bf-update-btn:disabled { cursor: wait; opacity: 0.68; }
+      .bf-update-status {
+        min-height: 18px;
+        color: #64748b;
+        font-size: 12px;
+        font-weight: 650;
+        text-align: center;
+      }
+      .bf-update-status[data-state="success"] { color: #047857; }
+      .bf-update-status[data-state="error"] { color: #b91c1c; }
+      .bf-version { margin-top: 12px; text-align: center; color: #94a3b8; font-size: 12px; font-weight: 700; }
+      @media (max-width: 600px) { .bf-update-btn { width: 100%; } }
       .bf-error {
         margin-top: 10px;
         color: #b91c1c;
@@ -214,20 +246,119 @@
     form.appendChild(inputRow);
     form.appendChild(error);
 
+    const api = globalThis.browser ?? globalThis.chrome;
+    let installedVersion = '';
+    let extensionName = 'BraveFox Focus Master';
+    try {
+      const manifest = api?.runtime?.getManifest?.();
+      installedVersion = manifest?.version || '';
+      extensionName = manifest?.name || extensionName;
+    } catch {
+      // Keep safe fallback labels.
+    }
+
+    const updateArea = document.createElement('div');
+    updateArea.className = 'bf-update-area';
+
+    const updateButton = document.createElement('button');
+    updateButton.type = 'button';
+    updateButton.className = 'bf-update-btn';
+    updateButton.textContent = 'Check for updates';
+
+    const updateStatus = document.createElement('div');
+    updateStatus.className = 'bf-update-status';
+    updateStatus.setAttribute('role', 'status');
+    updateStatus.setAttribute('aria-live', 'polite');
+    updateStatus.textContent = installedVersion ? `Installed version: ${installedVersion}` : '';
+
+    const setUpdateStatus = (message, state = '') => {
+      updateStatus.textContent = message;
+      if (state) updateStatus.dataset.state = state;
+      else delete updateStatus.dataset.state;
+    };
+
+    const requestChromiumUpdateCheck = () => new Promise((resolve, reject) => {
+      if (typeof api?.runtime?.requestUpdateCheck !== 'function') {
+        reject(new Error('This Chromium build does not expose manual extension update checks.'));
+        return;
+      }
+
+      let settled = false;
+      const resolveOnce = (resultOrStatus, details = undefined) => {
+        if (settled) return;
+        settled = true;
+        const runtimeError = api.runtime.lastError;
+        if (runtimeError) {
+          reject(new Error(runtimeError.message));
+          return;
+        }
+        const result = typeof resultOrStatus === 'string'
+          ? { status: resultOrStatus, ...(details || {}) }
+          : resultOrStatus;
+        resolve(result || { status: 'no_update' });
+      };
+      const rejectOnce = errorValue => {
+        if (settled) return;
+        settled = true;
+        reject(errorValue instanceof Error ? errorValue : new Error(String(errorValue)));
+      };
+
+      try {
+        const maybePromise = api.runtime.requestUpdateCheck(resolveOnce);
+        if (maybePromise && typeof maybePromise.then === 'function') {
+          maybePromise.then(resolveOnce, rejectOnce);
+        }
+      } catch (errorValue) {
+        rejectOnce(errorValue);
+      }
+    });
+
+    updateButton.addEventListener('click', async () => {
+      updateButton.disabled = true;
+      updateButton.textContent = 'Checking for updates…';
+      setUpdateStatus(installedVersion ? `Checking from version ${installedVersion}…` : 'Checking for updates…');
+
+      try {
+        const result = await requestChromiumUpdateCheck();
+        const status = result?.status || 'no_update';
+
+        if (status === 'update_available') {
+          const nextVersion = result?.version ? ` ${result.version}` : '';
+          setUpdateStatus(`Update${nextVersion} found. Chrome will install it automatically when ready.`, 'success');
+          updateButton.textContent = 'Update found';
+          return;
+        }
+
+        if (status === 'throttled') {
+          setUpdateStatus('Chrome throttled the update check. Try again later.', 'error');
+          updateButton.textContent = 'Try again later';
+          return;
+        }
+
+        setUpdateStatus(installedVersion
+          ? `${extensionName} ${installedVersion} is up to date.`
+          : `${extensionName} is up to date.`, 'success');
+        updateButton.textContent = 'Check again';
+      } catch (checkError) {
+        setUpdateStatus(checkError?.message || 'Chrome could not complete the update check.', 'error');
+        updateButton.textContent = 'Check again';
+      } finally {
+        updateButton.disabled = false;
+      }
+    });
+
+    updateArea.appendChild(updateButton);
+    updateArea.appendChild(updateStatus);
+
     const version = document.createElement('div');
     version.className = 'bf-version';
-    try {
-      const api = globalThis.browser ?? globalThis.chrome;
-      const installedVersion = api?.runtime?.getManifest?.().version || '';
-      version.textContent = installedVersion
-        ? `Via BraveFox Enhancer v${installedVersion}`
-        : 'Powered by BraveFox Enhancer';
-    } catch {
-      version.textContent = 'Powered by BraveFox Enhancer';
-    }
+    version.textContent = installedVersion
+      ? `${extensionName} v${installedVersion}`
+      : extensionName;
 
     card.appendChild(title);
     card.appendChild(form);
+    card.appendChild(updateArea);
     card.appendChild(version);
 
     container.appendChild(card);
