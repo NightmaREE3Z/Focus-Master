@@ -119,7 +119,9 @@
       <section class="sync-dialog-section">
         <label class="field-label" for="githubTokenInput">Fine-grained GitHub token</label>
         <input id="githubTokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="Token with repository Contents: read/write">
-        <p class="field-help">Stored only in this browser profile’s local extension storage. Never bundled into the extension package or uploaded to the list repository.</p>
+        <p class="field-help">Stored in this browser profile’s local extension storage. Never bundled into the extension package or uploaded to the list repository.</p>
+        <label class="checkbox-line sync-auto-line"><input id="tokenRecoveryToggle" type="checkbox" checked> Keep a clean-install recovery copy in Google Drive</label>
+        <p class="field-help">On Save, an approved Chrome profile account can authorize this extension to keep its own hidden recovery record in Google Drive app data. After a clean reinstall, the same account can restore it automatically. Other accounts and unsigned profiles never receive it.</p>
         <label class="checkbox-line sync-auto-line"><input id="automaticSyncToggle" type="checkbox" checked> Automatic Sync</label>
         <p class="field-help">Checks every 15 minutes and shortly after changes. Terms use the selected Sync Profile; links are global. TrustedSites.csv is centrally managed and download-only.</p>
         <button id="clearGithubToken" class="secondary-button danger-lite" type="button">Forget saved token</button>

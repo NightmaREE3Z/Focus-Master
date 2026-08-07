@@ -279,6 +279,15 @@ function syncStatusText(sync = state.githubSync) {
   if (sync.profileSwitchPending) lines.push(`Profile switch pending: local terms are still ${sync.termsProfileLabel || sync.termsProfile}; use manual Download or Upload to commit the switch.`);
   lines.push(sync.autoSync ? 'Automatic Sync: enabled' : 'Automatic Sync: disabled');
   lines.push(sync.hasToken ? 'GitHub token: saved locally' : 'GitHub token: not saved (downloads still work)');
+  if (sync.tokenRecovery) {
+    const accountSuffix = sync.recoveryAccountEmail ? ` for ${sync.recoveryAccountEmail}` : '';
+    if (sync.recoveryReady) lines.push(sync.recoveredFromGoogleDrive ? `Google Drive recovery: token restored${accountSuffix}` : `Google Drive recovery: backup ready${accountSuffix}`);
+    else if (!sync.recoverySupported) lines.push('Google Drive recovery: Chrome OAuth is unavailable');
+    else if (!sync.recoveryEligible) lines.push(`Google Drive recovery: blocked — ${sync.recoveryBlockedReason || 'an approved Chrome profile account is required.'}`);
+    else if (sync.recoveryError) lines.push(`Google Drive recovery: ${sync.recoveryError}`);
+    else if (sync.recoveryAuthorizationRequired || !sync.recoveryAuthorized) lines.push(`Google Drive recovery: authorization required — save the settings to connect${accountSuffix}`);
+    else lines.push(`Google Drive recovery: connected, waiting for a saved token${accountSuffix}`);
+  } else lines.push('Google Drive recovery: disabled');
   lines.push(`Pending changes: ${Number(sync.pendingCount) || 0}`);
   if (sync.lastSyncAt) lines.push(`Last sync: ${new Date(sync.lastSyncAt).toLocaleString()} — ${sync.lastAction || 'completed'}`);
   else lines.push('Last sync: never');
@@ -299,6 +308,7 @@ async function refreshGithubSyncStatus() {
   const response = await message({ type: MESSAGE.getGitHubSyncStatus });
   applyResponse(response);
   if (elements.automaticSyncToggle) elements.automaticSyncToggle.checked = response.githubSync.autoSync !== false;
+  if (elements.tokenRecoveryToggle) elements.tokenRecoveryToggle.checked = response.githubSync.tokenRecovery !== false;
   if (elements.syncProfileSelect) elements.syncProfileSelect.value = response.githubSync.activeProfile || 'haukkis';
   if (elements.detectedProfileStatus) {
     if (response.githubSync.detectedEmail) {
@@ -365,6 +375,8 @@ The current local terms will NOT be replaced now. Automatic term sync pauses unt
   const response = await message({
     type: MESSAGE.saveGitHubSyncConfig,
     autoSync: elements.automaticSyncToggle.checked,
+    tokenRecovery: elements.tokenRecoveryToggle.checked,
+    interactiveRecovery: elements.tokenRecoveryToggle.checked,
     token,
     activeProfile: requestedProfile,
     confirmProfileSwitch,
@@ -438,8 +450,11 @@ function bindGithubSyncDialog() {
     elements.saveGithubSyncSettings.disabled = true;
     elements.saveGithubSyncSettings.textContent = 'Saving…';
     try {
-      await saveGithubSettings();
-      toast('GitHub sync settings saved.');
+      const sync = await saveGithubSettings();
+      if (sync.tokenRecovery && sync.recoveryReady) toast('GitHub sync settings saved; Google Drive recovery is ready.');
+      else if (sync.tokenRecovery && sync.recoveryAuthorizationRequired) toast('Settings saved locally, but Google Drive authorization was not completed.');
+      else if (sync.tokenRecovery && sync.recoveryError) toast(`Settings saved locally; recovery error: ${sync.recoveryError}`);
+      else toast('GitHub sync settings saved.');
     } catch (error) {
       if (!lockingOut) toast(error.message);
     } finally {
@@ -448,11 +463,13 @@ function bindGithubSyncDialog() {
     }
   });
   elements.clearGithubToken.addEventListener('click', async () => {
-    if (!window.confirm('Forget the GitHub token saved on this device?')) return;
+    if (!window.confirm('Forget the GitHub token saved locally and delete its Google Drive recovery copy?')) return;
     try {
       const response = await message({
         type: MESSAGE.saveGitHubSyncConfig,
         autoSync: elements.automaticSyncToggle.checked,
+        tokenRecovery: elements.tokenRecoveryToggle.checked,
+        interactiveRecovery: true,
         clearToken: true
       });
       applyResponse(response);
@@ -577,7 +594,7 @@ function bind() {
     adminLocked: $('#adminLocked'), adminUnlockForm: $('#adminUnlockForm'), adminPasswordInput: $('#adminPasswordInput'),
     adminUnlockButton: $('#adminUnlockButton'), adminError: $('#adminError'), adminControlsMount: $('#adminControlsMount'),
     lockButton: $('#lockButton'), toast: $('#toast'), syncLabel: $('#syncLabel'), syncDialog: $('#syncDialog'),
-    closeSyncDialog: $('#closeSyncDialog'), githubTokenInput: $('#githubTokenInput'), automaticSyncToggle: $('#automaticSyncToggle'),
+    closeSyncDialog: $('#closeSyncDialog'), githubTokenInput: $('#githubTokenInput'), tokenRecoveryToggle: $('#tokenRecoveryToggle'), automaticSyncToggle: $('#automaticSyncToggle'),
     clearGithubToken: $('#clearGithubToken'), githubSyncStatus: $('#githubSyncStatus'), termsRawLink: $('#termsRawLink'), linksRawLink: $('#linksRawLink'),
     trustedSitesRawLink: $('#trustedSitesRawLink'), syncProfileSelect: $('#syncProfileSelect'), syncProfileHelp: $('#syncProfileHelp'), detectedProfileStatus: $('#detectedProfileStatus'),
     saveGithubSyncSettings: $('#saveGithubSyncSettings'), downloadFromGithub: $('#downloadFromGithub'), uploadToGithub: $('#uploadToGithub')

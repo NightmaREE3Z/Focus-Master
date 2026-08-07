@@ -6,9 +6,18 @@ import { getTrustedSitesStatus, initializeTrustedSites, refreshTrustedSites } fr
 const browser = globalThis.browser ?? globalThis.chrome;
 const LOG_PREFIX = '[BraveFox Focus Master GitHub Sync]';
 const CONFIG_KEY = 'bfb:github-sync-config';
+const TOKEN_VAULT_KEY = 'bfb:github-token-vault-v1';
+const TOKEN_VAULT_VERSION = 1;
+const TOKEN_RECOVERY_VERSION = 2;
+const TOKEN_RECOVERY_META_KEY = 'bfb:github-token-drive-recovery-meta-v1';
+const TOKEN_RECOVERY_FILE_NAME = 'focus-master-pat-recovery.json';
+const TOKEN_RECOVERY_APP_ID = 'focus-master-standalone';
+const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
+const DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
 const STATE_KEY = 'bfb:github-sync-state';
 const AUTO_SYNC_ALARM = 'bfb-github-auto-sync';
 const DEBOUNCED_SYNC_ALARM = 'bfb-github-debounced-sync';
+const PAT_RECOVERY_RETRY_ALARM = 'bfb-pat-recovery-retry';
 const AUTO_SYNC_INTERVAL_MINUTES = 15;
 const DEBOUNCE_MS = 5000;
 const REQUIRED_DATA_COLLECTION = Object.freeze(['authenticationInfo', 'browsingActivity', 'searchTerms']);
@@ -16,13 +25,20 @@ const REQUIRED_DATA_COLLECTION = Object.freeze(['authenticationInfo', 'browsingA
 export const SYNC_PROFILES = Object.freeze({
   haukkis: Object.freeze({
     id: 'haukkis', label: 'Haukkis', termsFile: 'blockedTerms.csv',
-    emails: Object.freeze(['xanaronnosucks@gmail.com', 'ripxanaronnov6@gmail.com'])
+    emails: Object.freeze(['xanaronnosucks@gmail.com', 'ripxanaronnov6@gmail.com', 'xanaronnosucksvm@gmail.com'])
   }),
   tapsa: Object.freeze({
     id: 'tapsa', label: 'Tapsa', termsFile: 'blockedTermsDad.csv',
     emails: Object.freeze(['tapsa.hauki@gmail.com'])
   })
 });
+
+const PAT_RECOVERY_ALLOWED_EMAILS = Object.freeze([
+  'tapsa.hauki@gmail.com',
+  'xanaronnosucks@gmail.com',
+  'ripxanaronnov6@gmail.com',
+  'xanaronnosucksvm@gmail.com'
+]);
 
 export const GITHUB_SYNC_TARGET = Object.freeze({
   owner: 'NightmaREE3Z', repository: 'Focus-Master', branch: 'BraveFox',
@@ -33,7 +49,7 @@ export const GITHUB_SYNC_TARGET = Object.freeze({
 });
 
 const DEFAULT_CONFIG = Object.freeze({
-  autoSync: true, token: '', activeProfile: 'haukkis', profileExplicit: false,
+  autoSync: true, token: '', tokenRecovery: true, activeProfile: 'haukkis', profileExplicit: false,
   profileSwitchPending: false, previousProfile: '', detectedEmail: '',
   suggestedProfile: '', detectionAvailable: false
 });
@@ -65,6 +81,7 @@ function normalizeConfig(value) {
   return {
     autoSync: source.autoSync !== false,
     token: String(source.token || '').trim(),
+    tokenRecovery: source.tokenRecovery !== false,
     activeProfile: normalizeProfile(source.activeProfile),
     profileExplicit: Boolean(source.profileExplicit),
     profileSwitchPending: Boolean(source.profileSwitchPending),
@@ -113,19 +130,333 @@ function normalizeState(value, activeProfile = 'haukkis') {
   };
 }
 
-async function readConfigRecord() {
-  const result = await browser.storage.local.get(CONFIG_KEY);
+function normalizeToken(value) { return String(value || '').trim(); }
+function tokenVaultRecord(token) {
+  return {
+    version: TOKEN_VAULT_VERSION,
+    token: normalizeToken(token),
+    updatedAt: Date.now()
+  };
+}
+function tokenRecoveryRecord(token, accountEmail = '') {
+  return {
+    version: TOKEN_RECOVERY_VERSION,
+    application: TOKEN_RECOVERY_APP_ID,
+    extensionId: String(browser.runtime?.id || ''),
+    accountEmail: String(accountEmail || '').trim().toLowerCase(),
+    token: normalizeToken(token),
+    updatedAt: Date.now()
+  };
+}
+function patRecoveryAccess(detected = {}) {
+  const email = String(detected.email || '').trim().toLowerCase();
+  const detectionAvailable = Boolean(detected.available);
+  const allowed = detectionAvailable && Boolean(email) && PAT_RECOVERY_ALLOWED_EMAILS.includes(email);
+  let blockedReason = '';
+  if (!detectionAvailable) blockedReason = 'Chrome profile account detection is unavailable.';
+  else if (!email) blockedReason = 'No Chrome profile account is signed in.';
+  else if (!allowed) blockedReason = `The Chrome profile account ${email} is not approved for automatic PAT recovery.`;
+  return { detectionAvailable, email, allowed, blockedReason };
+}
+async function currentPatRecoveryAccess() {
+  return patRecoveryAccess(await detectBrowserProfileEmail());
+}
+function runtimeErrorMessage() {
+  try { return String(browser.runtime?.lastError?.message || ''); } catch { return ''; }
+}
+function normalizeAuthTokenResult(value) {
+  if (typeof value === 'string') return value.trim();
+  return String(value?.token || '').trim();
+}
+async function getGoogleAuthToken({ interactive = false } = {}) {
+  const identity = browser.identity;
+  if (!identity?.getAuthToken) {
+    return { supported: false, authorized: false, token: '', interactionRequired: false, error: 'Chrome OAuth is unavailable.' };
+  }
+  return new Promise(resolve => {
+    let settled = false;
+    let timeoutId = 0;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      const token = normalizeAuthTokenResult(value);
+      const runtimeError = runtimeErrorMessage();
+      resolve({
+        supported: true,
+        authorized: Boolean(token),
+        token,
+        interactionRequired: !token,
+        error: token ? '' : (runtimeError || (interactive ? 'Google Drive authorization was not completed.' : 'Google Drive authorization is required.'))
+      });
+    };
+    const fail = error => {
+      if (settled) return;
+      settled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      resolve({ supported: true, authorized: false, token: '', interactionRequired: true, error: String(error?.message || error || 'Google Drive authorization failed.') });
+    };
+    try {
+      const maybe = identity.getAuthToken({ interactive: Boolean(interactive) }, finish);
+      if (maybe?.then) maybe.then(finish).catch(fail);
+    } catch (error) { fail(error); }
+    if (!settled) timeoutId = setTimeout(() => finish(null), interactive ? 120000 : 8000);
+  });
+}
+async function removeCachedGoogleAuthToken(token) {
+  if (!token || !browser.identity?.removeCachedAuthToken) return;
+  await new Promise(resolve => {
+    let settled = false;
+    const done = () => { if (!settled) { settled = true; resolve(); } };
+    try {
+      const maybe = browser.identity.removeCachedAuthToken({ token }, done);
+      if (maybe?.then) maybe.then(done).catch(done);
+    } catch { done(); }
+    setTimeout(done, 1500);
+  });
+}
+async function responseError(response, label) {
+  let detail = '';
+  try {
+    const text = await response.text();
+    if (text) {
+      try { detail = String(JSON.parse(text)?.error?.message || text); }
+      catch { detail = text; }
+    }
+  } catch {}
+  return `${label} failed (HTTP ${response.status})${detail ? `: ${detail.slice(0, 240)}` : ''}`;
+}
+async function driveRequest(url, options = {}, { interactive = false, retryAuth = true } = {}) {
+  const auth = await getGoogleAuthToken({ interactive });
+  if (!auth.token) return { ok: false, response: null, auth, error: auth.error };
+  let response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      cache: 'no-store',
+      credentials: 'omit',
+      headers: { ...(options.headers || {}), Authorization: `Bearer ${auth.token}` }
+    });
+  } catch (error) {
+    return { ok: false, response: null, auth, error: String(error?.message || error) };
+  }
+  if (response.status === 401 && retryAuth) {
+    await removeCachedGoogleAuthToken(auth.token);
+    return driveRequest(url, options, { interactive, retryAuth: false });
+  }
+  return { ok: response.ok, response, auth, error: '' };
+}
+function escapeDriveQueryValue(value) {
+  return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+let driveRecoveryCache = { expiresAt: 0, key: '', value: null };
+function invalidateDriveRecoveryCache() { driveRecoveryCache = { expiresAt: 0, key: '', value: null }; }
+async function findDriveRecoveryFiles({ interactive = false } = {}) {
+  const q = `name = '${escapeDriveQueryValue(TOKEN_RECOVERY_FILE_NAME)}' and trashed = false`;
+  const url = `${DRIVE_API_BASE}/files?spaces=appDataFolder&pageSize=100&fields=files(id,name,modifiedTime,appProperties)&q=${encodeURIComponent(q)}`;
+  const request = await driveRequest(url, { method: 'GET', headers: { Accept: 'application/json' } }, { interactive });
+  if (!request.ok) {
+    return { ...request.auth, files: [], error: request.response ? await responseError(request.response, 'Google Drive recovery lookup') : request.error };
+  }
+  const payload = await request.response.json();
+  const files = (Array.isArray(payload?.files) ? payload.files : [])
+    .filter(file => file?.id)
+    .sort((left, right) => String(right.modifiedTime || '').localeCompare(String(left.modifiedTime || '')));
+  return { ...request.auth, files, error: '' };
+}
+function validateDriveRecoveryRecord(value, accountEmail) {
+  if (!value || typeof value !== 'object') return { valid: false, token: '', error: 'The Google Drive recovery record is not valid JSON data.' };
+  if (String(value.application || '') !== TOKEN_RECOVERY_APP_ID) return { valid: false, token: '', error: 'The Google Drive recovery record belongs to a different BraveFox application.' };
+  if (String(value.extensionId || '') !== String(browser.runtime?.id || '')) return { valid: false, token: '', error: 'The Google Drive recovery record belongs to a different extension ID.' };
+  if (String(value.accountEmail || '').trim().toLowerCase() !== String(accountEmail || '').trim().toLowerCase()) return { valid: false, token: '', error: 'The Google Drive recovery record belongs to a different approved account.' };
+  const token = normalizeToken(value.token);
+  if (!token) return { valid: false, token: '', error: 'The Google Drive recovery record does not contain a token.' };
+  return { valid: true, token, updatedAt: Number(value.updatedAt) || 0, error: '' };
+}
+async function readTokenRecovery(access = null, { interactive = false, force = false } = {}) {
+  const account = access || await currentPatRecoveryAccess();
+  if (!account.allowed) return { supported: true, eligible: false, authorized: false, authorizationRequired: false, hasRecord: false, token: '', error: '', ...account };
+  const cacheKey = `${account.email}|${browser.runtime?.id || ''}`;
+  if (!force && driveRecoveryCache.value && driveRecoveryCache.key === cacheKey && Date.now() < driveRecoveryCache.expiresAt) return driveRecoveryCache.value;
+  const lookup = await findDriveRecoveryFiles({ interactive });
+  if (!lookup.authorized) {
+    const value = { supported: lookup.supported !== false, eligible: true, authorized: false, authorizationRequired: Boolean(lookup.interactionRequired), hasRecord: false, token: '', error: interactive ? lookup.error : '', authDetail: lookup.error, ...account };
+    driveRecoveryCache = { expiresAt: Date.now() + 15000, key: cacheKey, value };
+    return value;
+  }
+  const file = lookup.files[0];
+  if (!file) {
+    const value = { supported: true, eligible: true, authorized: true, authorizationRequired: false, hasRecord: false, token: '', remoteModifiedTime: '', error: '', ...account };
+    driveRecoveryCache = { expiresAt: Date.now() + 30000, key: cacheKey, value };
+    return value;
+  }
+  const request = await driveRequest(`${DRIVE_API_BASE}/files/${encodeURIComponent(file.id)}?alt=media`, { method: 'GET', headers: { Accept: 'application/json' } }, { interactive: false });
+  if (!request.ok) {
+    const value = { supported: true, eligible: true, authorized: true, authorizationRequired: false, hasRecord: false, token: '', error: request.response ? await responseError(request.response, 'Google Drive recovery download') : request.error, ...account };
+    driveRecoveryCache = { expiresAt: Date.now() + 15000, key: cacheKey, value };
+    return value;
+  }
+  let payload;
+  try { payload = await request.response.json(); }
+  catch { payload = null; }
+  const validated = validateDriveRecoveryRecord(payload, account.email);
+  const value = {
+    supported: true, eligible: true, authorized: true, authorizationRequired: false,
+    hasRecord: validated.valid, token: validated.token || '', remoteModifiedTime: String(file.modifiedTime || ''),
+    remoteUpdatedAt: validated.updatedAt || 0, error: validated.error || '', ...account
+  };
+  driveRecoveryCache = { expiresAt: Date.now() + 60000, key: cacheKey, value };
+  return value;
+}
+async function writeTokenRecovery(token, access = null, { interactive = false } = {}) {
+  const account = access || await currentPatRecoveryAccess();
+  const cleanToken = normalizeToken(token);
+  if (!account.allowed) return { supported: true, eligible: false, authorized: false, authorizationRequired: false, ready: false, error: '', ...account };
+  if (!cleanToken) return clearTokenRecovery({ access: account, interactive });
+  const lookup = await findDriveRecoveryFiles({ interactive });
+  if (!lookup.authorized) return { supported: lookup.supported !== false, eligible: true, authorized: false, authorizationRequired: Boolean(lookup.interactionRequired), ready: false, error: lookup.error, ...account };
+  let file = lookup.files[0];
+  if (!file) {
+    const create = await driveRequest(`${DRIVE_API_BASE}/files?fields=id,name,modifiedTime`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        name: TOKEN_RECOVERY_FILE_NAME,
+        parents: ['appDataFolder'],
+        mimeType: 'application/json',
+        appProperties: { application: TOKEN_RECOVERY_APP_ID, extensionId: String(browser.runtime?.id || '') }
+      })
+    }, { interactive: false });
+    if (!create.ok) return { supported: true, eligible: true, authorized: true, authorizationRequired: false, ready: false, error: create.response ? await responseError(create.response, 'Google Drive recovery file creation') : create.error, ...account };
+    file = await create.response.json();
+  }
+  const record = tokenRecoveryRecord(cleanToken, account.email);
+  const upload = await driveRequest(`${DRIVE_UPLOAD_BASE}/files/${encodeURIComponent(file.id)}?uploadType=media&fields=id,name,modifiedTime`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(record)
+  }, { interactive: false });
+  if (!upload.ok) return { supported: true, eligible: true, authorized: true, authorizationRequired: false, ready: false, error: upload.response ? await responseError(upload.response, 'Google Drive recovery upload') : upload.error, ...account };
+  const uploaded = await upload.response.json().catch(() => ({}));
+  for (const duplicate of lookup.files.slice(file.id === lookup.files[0]?.id ? 1 : 0)) {
+    if (duplicate.id === file.id) continue;
+    void driveRequest(`${DRIVE_API_BASE}/files/${encodeURIComponent(duplicate.id)}`, { method: 'DELETE' }, { interactive: false });
+  }
+  invalidateDriveRecoveryCache();
+  return { supported: true, eligible: true, authorized: true, authorizationRequired: false, ready: true, hasRecord: true, token: cleanToken, remoteModifiedTime: String(uploaded.modifiedTime || ''), remoteUpdatedAt: record.updatedAt, error: '', ...account };
+}
+async function clearTokenRecovery({ access = null, interactive = false } = {}) {
+  const account = access || await currentPatRecoveryAccess();
+  if (!account.allowed) return { supported: true, eligible: false, authorized: false, authorizationRequired: false, ready: false, error: '', ...account };
+  const lookup = await findDriveRecoveryFiles({ interactive });
+  if (!lookup.authorized) return { supported: lookup.supported !== false, eligible: true, authorized: false, authorizationRequired: Boolean(lookup.interactionRequired), ready: false, error: interactive ? lookup.error : '', authDetail: lookup.error, ...account };
+  let error = '';
+  for (const file of lookup.files) {
+    const request = await driveRequest(`${DRIVE_API_BASE}/files/${encodeURIComponent(file.id)}`, { method: 'DELETE' }, { interactive: false });
+    if (!request.ok && request.response?.status !== 404) error = request.response ? await responseError(request.response, 'Google Drive recovery deletion') : request.error;
+  }
+  invalidateDriveRecoveryCache();
+  return { supported: true, eligible: true, authorized: true, authorizationRequired: false, ready: false, hasRecord: false, error, ...account };
+}
+async function readConfigRecord({ checkRecovery = false } = {}) {
+  const result = await browser.storage.local.get([CONFIG_KEY, TOKEN_VAULT_KEY, TOKEN_RECOVERY_META_KEY]);
   const raw = result[CONFIG_KEY];
-  return { config: normalizeConfig(raw || DEFAULT_CONFIG), hasProfileSetting: Boolean(raw && Object.hasOwn(raw, 'activeProfile')) };
+  const vault = result[TOKEN_VAULT_KEY];
+  const previousMeta = result[TOKEN_RECOVERY_META_KEY] && typeof result[TOKEN_RECOVERY_META_KEY] === 'object' ? result[TOKEN_RECOVERY_META_KEY] : {};
+  const hasVaultRecord = Boolean(vault && typeof vault === 'object' && Object.hasOwn(vault, 'token'));
+  const legacyToken = normalizeToken(raw?.token);
+  const vaultToken = hasVaultRecord ? normalizeToken(vault.token) : '';
+  const recoveryEnabled = raw?.tokenRecovery !== false;
+  const access = await currentPatRecoveryAccess();
+  const localToken = hasVaultRecord ? vaultToken : legacyToken;
+  let recovery = {
+    supported: previousMeta.supported !== false,
+    eligible: access.allowed,
+    authorized: Boolean(previousMeta.authorized),
+    authorizationRequired: Boolean(previousMeta.authorizationRequired),
+    hasRecord: Boolean(previousMeta.hasRecord),
+    token: '',
+    remoteModifiedTime: String(previousMeta.remoteModifiedTime || ''),
+    remoteUpdatedAt: Number(previousMeta.remoteUpdatedAt) || 0,
+    error: String(previousMeta.error || ''),
+    ...access
+  };
+  const shouldCheckRecovery = recoveryEnabled && access.allowed && (!localToken || checkRecovery);
+  if (shouldCheckRecovery) recovery = await readTokenRecovery(access, { force: checkRecovery });
+  const recoveryToken = recoveryEnabled && access.allowed && recovery.hasRecord ? normalizeToken(recovery.token) : '';
+  const recoveredFromGoogleDrive = !localToken && Boolean(recoveryToken);
+  const resolvedToken = localToken || recoveryToken;
+  const config = normalizeConfig({ ...(raw || DEFAULT_CONFIG), token: resolvedToken, tokenRecovery: recoveryEnabled });
+  const repairs = {};
+  if (!hasVaultRecord && resolvedToken) repairs[TOKEN_VAULT_KEY] = tokenVaultRecord(resolvedToken);
+  if (normalizeToken(raw?.token) !== resolvedToken || raw?.tokenRecovery !== config.tokenRecovery) repairs[CONFIG_KEY] = config;
+  if (shouldCheckRecovery) repairs[TOKEN_RECOVERY_META_KEY] = {
+    supported: recovery.supported !== false,
+    authorized: Boolean(recovery.authorized),
+    authorizationRequired: Boolean(recovery.authorizationRequired),
+    hasRecord: Boolean(recovery.hasRecord),
+    remoteModifiedTime: String(recovery.remoteModifiedTime || ''),
+    remoteUpdatedAt: Number(recovery.remoteUpdatedAt) || 0,
+    error: String(recovery.error || ''),
+    accountEmail: access.email,
+    checkedAt: Date.now()
+  };
+  if (Object.keys(repairs).length) await browser.storage.local.set(repairs);
+  return {
+    config,
+    hasProfileSetting: Boolean(raw && Object.hasOwn(raw, 'activeProfile')),
+    tokenVaultReady: hasVaultRecord || Boolean(resolvedToken),
+    recoveredFromGoogleDrive,
+    recoverySupported: recovery.supported !== false,
+    recoveryEligible: access.allowed,
+    recoveryAuthorized: Boolean(recovery.authorized),
+    recoveryAuthorizationRequired: Boolean(recovery.authorizationRequired),
+    recoveryAccountEmail: access.email,
+    recoveryBlockedReason: access.blockedReason,
+    recoveryReady: Boolean(access.allowed && config.tokenRecovery && resolvedToken && recovery.hasRecord && (!recovery.token || recovery.token === resolvedToken)),
+    recoveryRemoteModifiedTime: String(recovery.remoteModifiedTime || ''),
+    recoveryError: String(recovery.error || '')
+  };
 }
 async function readConfig() { return (await readConfigRecord()).config; }
-async function writeConfig(config) { const clean = normalizeConfig(config); await browser.storage.local.set({ [CONFIG_KEY]: clean }); return clean; }
+async function writeConfig(config, { persistToken = false, reconcileRecovery = false, interactiveRecovery = false } = {}) {
+  const clean = normalizeConfig(config);
+  const changes = { [CONFIG_KEY]: clean };
+  if (persistToken) changes[TOKEN_VAULT_KEY] = tokenVaultRecord(clean.token);
+  await browser.storage.local.set(changes);
+  if (persistToken || reconcileRecovery) {
+    const access = await currentPatRecoveryAccess();
+    let recoveryState;
+    if (clean.tokenRecovery && clean.token) recoveryState = await writeTokenRecovery(clean.token, access, { interactive: interactiveRecovery });
+    else recoveryState = await clearTokenRecovery({ access, interactive: interactiveRecovery });
+    await browser.storage.local.set({
+      [TOKEN_RECOVERY_META_KEY]: {
+        supported: recoveryState.supported !== false,
+        authorized: Boolean(recoveryState.authorized),
+        authorizationRequired: Boolean(recoveryState.authorizationRequired),
+        hasRecord: Boolean(recoveryState.ready || recoveryState.hasRecord),
+        remoteModifiedTime: String(recoveryState.remoteModifiedTime || ''),
+        remoteUpdatedAt: Number(recoveryState.remoteUpdatedAt) || 0,
+        error: String(recoveryState.error || ''),
+        accountEmail: access.email,
+        checkedAt: Date.now()
+      }
+    });
+  }
+  return clean;
+}
 async function readState(config = null) { const current = config || await readConfig(); const result = await browser.storage.local.get(STATE_KEY); return normalizeState(result[STATE_KEY] || DEFAULT_STATE, current.activeProfile); }
 async function writeState(state, config = null) { const current = config || await readConfig(); const clean = normalizeState(state, current.activeProfile); await browser.storage.local.set({ [STATE_KEY]: clean }); return clean; }
 
-async function detectBrowserProfileEmail() {
+let profileIdentityCache = { expiresAt: 0, value: null };
+async function detectBrowserProfileEmail({ force = false } = {}) {
+  if (!force && profileIdentityCache.value && Date.now() < profileIdentityCache.expiresAt) return profileIdentityCache.value;
   const identity = browser.identity;
-  if (!identity?.getProfileUserInfo) return { available: false, email: '', profile: '' };
+  if (!identity?.getProfileUserInfo) {
+    const value = { available: false, email: '', profile: '', recoveryAllowed: false };
+    profileIdentityCache = { expiresAt: Date.now() + 30000, value };
+    return value;
+  }
   const info = await new Promise(resolve => {
     let finished = false;
     const done = value => { if (!finished) { finished = true; resolve(value || {}); } };
@@ -138,11 +469,18 @@ async function detectBrowserProfileEmail() {
     setTimeout(() => done({}), 1500);
   });
   const email = String(info?.email || '').trim().toLowerCase();
-  return { available: true, email, profile: profileForEmail(email) };
+  const value = {
+    available: true,
+    email,
+    profile: profileForEmail(email),
+    recoveryAllowed: PAT_RECOVERY_ALLOWED_EMAILS.includes(email)
+  };
+  profileIdentityCache = { expiresAt: Date.now() + (email ? 30000 : 3000), value };
+  return value;
 }
 
-async function refreshProfileDetection({ allowInitialSelection = false } = {}) {
-  const record = await readConfigRecord();
+async function refreshProfileDetection({ allowInitialSelection = false, includeRecord = false } = {}) {
+  const record = await readConfigRecord({ checkRecovery: includeRecord });
   let config = record.config;
   const detected = await detectBrowserProfileEmail();
   const patch = { ...config, detectionAvailable: detected.available, detectedEmail: detected.email };
@@ -154,7 +492,7 @@ async function refreshProfileDetection({ allowInitialSelection = false } = {}) {
     else patch.suggestedProfile = '';
   } else patch.suggestedProfile = '';
   config = await writeConfig(patch);
-  return config;
+  return includeRecord ? { config, record } : config;
 }
 
 function apiUrl(kind, profileId) {
@@ -225,9 +563,9 @@ async function uploadMergedKind(kind,token,current,state,profile){for(let attemp
 async function setStatus(state,{action='',error='',synced=false}={}){return writeState({...state,lastAction:action||state.lastAction,lastError:String(error||''),lastSyncAt:synced?Date.now():state.lastSyncAt});}
 
 export async function getGitHubSyncStatus(){
-  const config=await refreshProfileDetection(); const state=await readState(config); const profile=SYNC_PROFILES[config.activeProfile]; const trusted=getTrustedSitesStatus();
+  const refreshed=await refreshProfileDetection({includeRecord:true}); const config=refreshed.config; const record=refreshed.record; const state=await readState(config); const profile=SYNC_PROFILES[config.activeProfile]; const trusted=getTrustedSitesStatus();
   return {
-    autoSync:config.autoSync,hasToken:Boolean(config.token),activeProfile:config.activeProfile,activeProfileLabel:profile.label,
+    autoSync:config.autoSync,hasToken:Boolean(config.token),tokenRecovery:config.tokenRecovery,recoverySupported:record.recoverySupported,recoveryEligible:record.recoveryEligible,recoveryAuthorized:record.recoveryAuthorized,recoveryAuthorizationRequired:record.recoveryAuthorizationRequired,recoveryAccountEmail:record.recoveryAccountEmail,recoveryBlockedReason:record.recoveryBlockedReason,recoveryReady:record.recoveryReady,recoveredFromGoogleDrive:record.recoveredFromGoogleDrive,recoveryRemoteModifiedTime:record.recoveryRemoteModifiedTime,recoveryError:record.recoveryError,activeProfile:config.activeProfile,activeProfileLabel:profile.label,
     termsProfile:state.termsProfile,termsProfileLabel:SYNC_PROFILES[state.termsProfile].label,
     profileSwitchPending:config.profileSwitchPending,suggestedProfile:config.suggestedProfile,
     suggestedProfileLabel:config.suggestedProfile?SYNC_PROFILES[config.suggestedProfile].label:'',
@@ -244,7 +582,11 @@ export async function saveGitHubSyncConfig(patch={}){
   let config=await readConfig();
   const next={...config};
   if(Object.hasOwn(patch,'autoSync'))next.autoSync=patch.autoSync!==false;
-  if(patch.clearToken)next.token='';else if(String(patch.token||'').trim())next.token=String(patch.token).trim();
+  const tokenRecoveryChanged=Object.hasOwn(patch,'tokenRecovery')&&Boolean(patch.tokenRecovery)!==config.tokenRecovery;
+  if(Object.hasOwn(patch,'tokenRecovery'))next.tokenRecovery=Boolean(patch.tokenRecovery);
+  let tokenChanged=false;
+  if(patch.clearToken){next.token='';tokenChanged=true;}
+  else if(String(patch.token||'').trim()){next.token=String(patch.token).trim();tokenChanged=true;}
   if(Object.hasOwn(SYNC_PROFILES, patch.activeProfile)){
     const requested=normalizeProfile(patch.activeProfile);
     if(requested!==config.activeProfile){
@@ -252,7 +594,7 @@ export async function saveGitHubSyncConfig(patch={}){
       next.previousProfile=config.activeProfile; next.activeProfile=requested; next.profileSwitchPending=true; next.profileExplicit=true; next.suggestedProfile='';
     } else if(patch.profileExplicit) next.profileExplicit=true;
   }
-  config=await writeConfig(next); setupGitHubSyncAlarms(config); return getGitHubSyncStatus();
+  config=await writeConfig(next,{persistToken:tokenChanged,reconcileRecovery:tokenChanged||tokenRecoveryChanged,interactiveRecovery:Boolean(patch.interactiveRecovery)}); setupGitHubSyncAlarms(config); return getGitHubSyncStatus();
 }
 
 export async function queueRemoteOperation(kind,action,value){
@@ -322,7 +664,7 @@ async function runAutomaticSyncInternal(){
 }
 export async function runAutomaticGitHubSync(){if(syncPromise)return syncPromise;syncPromise=runAutomaticSyncInternal().finally(()=>{syncPromise=null;});return syncPromise;}
 function setupGitHubSyncAlarms(config=DEFAULT_CONFIG){if(config.autoSync)browser.alarms.create(AUTO_SYNC_ALARM,{periodInMinutes:AUTO_SYNC_INTERVAL_MINUTES});else{void browser.alarms.clear(AUTO_SYNC_ALARM);void browser.alarms.clear(DEBOUNCED_SYNC_ALARM);}}
-export async function initializeGitHubSync(){const config=await refreshProfileDetection({allowInitialSelection:true});const state=await readState(config);if(!state.termsProfile)state.termsProfile=config.activeProfile;await writeState(state,config);setupGitHubSyncAlarms(config);await initializeTrustedSites();if(config.autoSync)scheduleAutomaticGitHubSync();return getGitHubSyncStatus();}
-browser.alarms.onAlarm.addListener(alarm=>{if(alarm.name!==AUTO_SYNC_ALARM&&alarm.name!==DEBOUNCED_SYNC_ALARM)return;void runAutomaticGitHubSync().catch(error=>console.warn(`${LOG_PREFIX} Automatic sync failed; the last valid local lists remain active:`,error));});
+export async function initializeGitHubSync(){const config=await refreshProfileDetection({allowInitialSelection:true});const state=await readState(config);if(!state.termsProfile)state.termsProfile=config.activeProfile;await writeState(state,config);setupGitHubSyncAlarms(config);if(config.tokenRecovery&&!config.token){try{browser.alarms.create(PAT_RECOVERY_RETRY_ALARM,{when:Date.now()+30000});}catch{}}else{void browser.alarms.clear(PAT_RECOVERY_RETRY_ALARM);}await initializeTrustedSites();if(config.autoSync)scheduleAutomaticGitHubSync();return getGitHubSyncStatus();}
+browser.alarms.onAlarm.addListener(alarm=>{if(alarm.name!==AUTO_SYNC_ALARM&&alarm.name!==DEBOUNCED_SYNC_ALARM&&alarm.name!==PAT_RECOVERY_RETRY_ALARM)return;void runAutomaticGitHubSync().catch(error=>console.warn(`${LOG_PREFIX} Automatic sync failed; the last valid local lists remain active:`,error));});
 browser.runtime.onStartup.addListener(()=>{void initializeGitHubSync();});
 browser.runtime.onInstalled.addListener(()=>{void initializeGitHubSync();});

@@ -544,6 +544,8 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           ok: true,
           githubSync: await saveGitHubSyncConfig({
             autoSync: message.autoSync,
+            tokenRecovery: message.tokenRecovery,
+            interactiveRecovery: Boolean(message.interactiveRecovery),
             token: message.token,
             clearToken: Boolean(message.clearToken),
             activeProfile: message.activeProfile,
