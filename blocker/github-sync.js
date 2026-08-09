@@ -4,6 +4,7 @@ import { normalizeLinkForStorage, normalizeTerm, uniqueInOrder } from './shared.
 import { getTrustedSitesStatus, initializeTrustedSites, refreshTrustedSites } from './trusted-sites.js';
 
 const browser = globalThis.browser ?? globalThis.chrome;
+const INCOGNITO_CONTEXT = Boolean(browser.extension?.inIncognitoContext);
 const LOG_PREFIX = '[BraveFox Focus Master GitHub Sync]';
 const CONFIG_KEY = 'bfb:github-sync-config';
 const TOKEN_VAULT_KEY = 'bfb:github-token-vault-v1';
@@ -169,6 +170,9 @@ function normalizeAuthTokenResult(value) {
   return String(value?.token || '').trim();
 }
 async function getGoogleAuthToken({ interactive = false } = {}) {
+  if (INCOGNITO_CONTEXT) {
+    return { supported: false, authorized: false, token: '', interactionRequired: false, error: 'Google identity is disabled in Incognito.' };
+  }
   const identity = browser.identity;
   if (!identity?.getAuthToken) {
     return { supported: false, authorized: false, token: '', interactionRequired: false, error: 'Chrome OAuth is unavailable.' };
@@ -204,7 +208,7 @@ async function getGoogleAuthToken({ interactive = false } = {}) {
   });
 }
 async function removeCachedGoogleAuthToken(token) {
-  if (!token || !browser.identity?.removeCachedAuthToken) return;
+  if (INCOGNITO_CONTEXT || !token || !browser.identity?.removeCachedAuthToken) return;
   await new Promise(resolve => {
     let settled = false;
     const done = () => { if (!settled) { settled = true; resolve(); } };
@@ -450,6 +454,11 @@ async function writeState(state, config = null) { const current = config || awai
 
 let profileIdentityCache = { expiresAt: 0, value: null };
 async function detectBrowserProfileEmail({ force = false } = {}) {
+  if (INCOGNITO_CONTEXT) {
+    const value = { available: false, email: '', profile: '', recoveryAllowed: false };
+    profileIdentityCache = { expiresAt: Date.now() + 30000, value };
+    return value;
+  }
   if (!force && profileIdentityCache.value && Date.now() < profileIdentityCache.expiresAt) return profileIdentityCache.value;
   const identity = browser.identity;
   if (!identity?.getProfileUserInfo) {
@@ -662,9 +671,9 @@ async function runAutomaticSyncInternal(){
     return{dataset,state,direction:uploaded?'upload':'download'};
   }catch(error){state=await setStatus(state,{action:state.lastAction||'Automatic GitHub sync',error:String(error?.message||error),synced:false});throw error;}
 }
-export async function runAutomaticGitHubSync(){if(syncPromise)return syncPromise;syncPromise=runAutomaticSyncInternal().finally(()=>{syncPromise=null;});return syncPromise;}
+export async function runAutomaticGitHubSync(){if(INCOGNITO_CONTEXT)return{skipped:true,reason:'GitHub sync is disabled in Incognito.'};if(syncPromise)return syncPromise;syncPromise=runAutomaticSyncInternal().finally(()=>{syncPromise=null;});return syncPromise;}
 function setupGitHubSyncAlarms(config=DEFAULT_CONFIG){if(config.autoSync)browser.alarms.create(AUTO_SYNC_ALARM,{periodInMinutes:AUTO_SYNC_INTERVAL_MINUTES});else{void browser.alarms.clear(AUTO_SYNC_ALARM);void browser.alarms.clear(DEBOUNCED_SYNC_ALARM);}}
-export async function initializeGitHubSync(){const config=await refreshProfileDetection({allowInitialSelection:true});const state=await readState(config);if(!state.termsProfile)state.termsProfile=config.activeProfile;await writeState(state,config);setupGitHubSyncAlarms(config);if(config.tokenRecovery&&!config.token){try{browser.alarms.create(PAT_RECOVERY_RETRY_ALARM,{when:Date.now()+30000});}catch{}}else{void browser.alarms.clear(PAT_RECOVERY_RETRY_ALARM);}await initializeTrustedSites();if(config.autoSync)scheduleAutomaticGitHubSync();return getGitHubSyncStatus();}
-browser.alarms.onAlarm.addListener(alarm=>{if(alarm.name!==AUTO_SYNC_ALARM&&alarm.name!==DEBOUNCED_SYNC_ALARM&&alarm.name!==PAT_RECOVERY_RETRY_ALARM)return;void runAutomaticGitHubSync().catch(error=>console.warn(`${LOG_PREFIX} Automatic sync failed; the last valid local lists remain active:`,error));});
-browser.runtime.onStartup.addListener(()=>{void initializeGitHubSync();});
-browser.runtime.onInstalled.addListener(()=>{void initializeGitHubSync();});
+export async function initializeGitHubSync(){if(INCOGNITO_CONTEXT){void browser.alarms.clear(AUTO_SYNC_ALARM);void browser.alarms.clear(DEBOUNCED_SYNC_ALARM);void browser.alarms.clear(PAT_RECOVERY_RETRY_ALARM);await initializeTrustedSites();return{skipped:true,incognito:true,reason:'Management sync and profile detection are disabled in Incognito.'};}const config=await refreshProfileDetection({allowInitialSelection:true});const state=await readState(config);if(!state.termsProfile)state.termsProfile=config.activeProfile;await writeState(state,config);setupGitHubSyncAlarms(config);if(config.tokenRecovery&&!config.token){try{browser.alarms.create(PAT_RECOVERY_RETRY_ALARM,{when:Date.now()+30000});}catch{}}else{void browser.alarms.clear(PAT_RECOVERY_RETRY_ALARM);}await initializeTrustedSites();if(config.autoSync)scheduleAutomaticGitHubSync();return getGitHubSyncStatus();}
+browser.alarms.onAlarm.addListener(alarm=>{if(INCOGNITO_CONTEXT)return;if(alarm.name!==AUTO_SYNC_ALARM&&alarm.name!==DEBOUNCED_SYNC_ALARM&&alarm.name!==PAT_RECOVERY_RETRY_ALARM)return;void runAutomaticGitHubSync().catch(error=>console.warn(`${LOG_PREFIX} Automatic sync failed; the last valid local lists remain active:`,error));});
+browser.runtime.onStartup.addListener(()=>{if(!INCOGNITO_CONTEXT)void initializeGitHubSync();});
+browser.runtime.onInstalled.addListener(()=>{if(!INCOGNITO_CONTEXT)void initializeGitHubSync();});

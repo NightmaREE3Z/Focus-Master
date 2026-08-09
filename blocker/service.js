@@ -585,8 +585,14 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
-void browser.storage.sync.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }).catch(() => {});
-void browser.storage.sync.remove(STORAGE_KEYS.auth).catch(() => {});
+try {
+  const accessLevelResult = browser.storage.sync?.setAccessLevel?.({ accessLevel: 'TRUSTED_CONTEXTS' });
+  if (accessLevelResult?.catch) void accessLevelResult.catch(() => {});
+} catch {}
+try {
+  const removeAuthResult = browser.storage.sync?.remove?.(STORAGE_KEYS.auth);
+  if (removeAuthResult?.catch) void removeAuthResult.catch(() => {});
+} catch {}
 void (async () => {
   try {
     await initializeTrustedSites();

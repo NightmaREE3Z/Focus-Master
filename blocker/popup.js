@@ -6,6 +6,11 @@ const input = document.querySelector('#passwordInput');
 const button = document.querySelector('#unlockButton');
 const errorText = document.querySelector('#errorText');
 const panel = document.querySelector('.lock-panel');
+const popupTitle = document.querySelector('#popupTitle');
+const subtitle = document.querySelector('.subtitle');
+const hint = document.querySelector('.hint');
+const quickBlockButton = document.querySelector('#openQuickBlock');
+const inIncognito = Boolean(browser.extension?.inIncognitoContext);
 
 const manifest = browser.runtime.getManifest();
 const installedVersion = manifest.version;
@@ -17,14 +22,6 @@ if (versionLabel) {
 }
 
 const updateButton = document.querySelector('#checkExtensionUpdate');
-const updateStatus = document.querySelector('#extensionUpdateStatus');
-
-function showUpdateStatus(message, state = '') {
-  if (!updateStatus) return;
-  updateStatus.textContent = message;
-  if (state) updateStatus.dataset.state = state;
-  else delete updateStatus.dataset.state;
-}
 
 function requestChromiumUpdateCheck() {
   return new Promise((resolve, reject) => {
@@ -69,47 +66,35 @@ function requestChromiumUpdateCheck() {
 }
 
 if (updateButton) {
-  showUpdateStatus(`Installed version: ${installedVersion}`);
-
   updateButton.addEventListener('click', async () => {
     updateButton.disabled = true;
     updateButton.textContent = 'Checking for updates…';
-    showUpdateStatus(`Checking from version ${installedVersion}…`);
 
     try {
       const result = await requestChromiumUpdateCheck();
       const resultStatus = result?.status || 'no_update';
 
       if (resultStatus === 'update_available') {
-        const nextVersion = result?.version ? ` ${result.version}` : '';
-        showUpdateStatus(
-          `Update${nextVersion} found. Chrome will install it automatically when ready.`,
-          'success'
-        );
-        updateButton.textContent = 'Update found';
+        updateButton.textContent = result?.version
+          ? `Update ${result.version} found`
+          : 'Update found';
         return;
       }
 
       if (resultStatus === 'throttled') {
-        showUpdateStatus('Chrome throttled the update check. Try again later.', 'error');
         updateButton.textContent = 'Try again later';
         return;
       }
 
-      showUpdateStatus(`${extensionName} ${installedVersion} is up to date.`, 'success');
-      updateButton.textContent = 'Check again';
+      updateButton.textContent = 'Up to date';
     } catch (updateError) {
-      showUpdateStatus(
-        updateError?.message || 'Chrome could not complete the update check.',
-        'error'
-      );
+      console.warn('BraveFox Focus Master update check failed:', updateError);
       updateButton.textContent = 'Check again';
     } finally {
       updateButton.disabled = false;
     }
   });
 }
-
 
 async function send(payload) {
   const response = await browser.runtime.sendMessage(payload);
@@ -134,7 +119,7 @@ function shake(message) {
   input.select();
 }
 
-form.addEventListener('submit', async event => {
+if (!inIncognito) form.addEventListener('submit', async event => {
   event.preventDefault();
   errorText.textContent = '';
   button.disabled = true;
@@ -163,8 +148,7 @@ form.addEventListener('submit', async event => {
   }
 });
 
-const quickBlockButton = document.querySelector('#openQuickBlock');
-if (quickBlockButton) {
+if (quickBlockButton && !inIncognito) {
   quickBlockButton.addEventListener('click', async () => {
     try {
       await browser.runtime.openOptionsPage();
@@ -175,4 +159,12 @@ if (quickBlockButton) {
   });
 }
 
-setTimeout(() => input.focus(), 0);
+if (inIncognito) {
+  if (popupTitle) popupTitle.textContent = 'Management unavailable in Incognito';
+  if (subtitle) subtitle.textContent = 'Blocking remains active.';
+  if (form) form.hidden = true;
+  if (quickBlockButton) quickBlockButton.hidden = true;
+  if (hint) hint.textContent = 'Open BraveFox Focus Master from a normal Chrome window to manage settings.';
+} else {
+  setTimeout(() => input.focus(), 0);
+}

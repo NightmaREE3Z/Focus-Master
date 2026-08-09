@@ -10,21 +10,19 @@
 <body data-page="popup">
   <main class="popup-shell">
     <header class="topbar">
-      <div class="brand">
-        <img src="../icons/icon48.png" alt="" class="brand-icon">
-        <div><strong>BraveFox</strong><span>Focus Master</span></div>
-      </div>
+      <div class="brand-wordmark">BraveFox Focus Master</div>
       <span class="status-pill" title="Blocking remains active while the manager is locked">✓</span>
     </header>
 
     <section class="lock-panel" aria-labelledby="popupTitle">
-      <div class="lock-disc" aria-hidden="true">
-        <svg viewBox="0 0 24 24" role="img">
-          <path d="M7 10V7a5 5 0 0 1 10 0v3h1a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h1zm2 0h6V7a3 3 0 0 0-6 0v3z"/>
-        </svg>
+      <div class="hero-row">
+        <div class="hero-side"></div>
+        <img class="lock-illustration" src="../icons/IconLocked.png" alt="Focus Master locked">
+        <button id="openQuickBlock" class="quick-block-link" type="button">Quick Block Settings</button>
       </div>
-      <h1 id="popupTitle">BraveFox Focus Master is locked</h1>
-      <p>Enter the BraveFox password to open Focus Master for its configured unlock period.</p>
+
+      <h1 id="popupTitle">Focus Master is locked</h1>
+      <p class="subtitle">Enter password to unlock</p>
 
       <form id="unlockForm" autocomplete="off" spellcheck="false">
         <div class="input-row">
@@ -37,12 +35,10 @@
       </form>
 
       <p class="hint">The full-page password prompt appears only after the unlock period expires.</p>
-      <button id="openQuickBlock" class="quick-block-link" type="button">Open Quick Block / Settings</button>
       <section id="extensionUpdateArea" class="extension-update-area" aria-label="Extension updates">
         <button id="checkExtensionUpdate" class="extension-update-button" type="button">Check for updates</button>
-        <p id="extensionUpdateStatus" class="extension-update-status" role="status" aria-live="polite"></p>
       </section>
-      <p id="enhancerVersion" class="hint enhancer-version">BraveFox Focus Master</p>
+      <p id="enhancerVersion" class="enhancer-version">BraveFox Focus Master</p>
     </section>
   </main>
   <script type="module" src="popup.js"></script>

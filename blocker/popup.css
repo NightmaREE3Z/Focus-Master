@@ -3,34 +3,34 @@
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: #172033;
   background: #ffffff;
-  --popup-width: 360px;
-  --popup-min-height: 535px;
-  --lock-panel-padding: 28px 26px 24px;
-  --lock-disc-size: 70px;
-  --lock-disc-icon-size: 34px;
+  --popup-width: 337px;
+  --popup-height: 405px;
 }
 
 :root[data-platform="android"] {
-  --popup-width: min(340px, 100vw);
-  --popup-min-height: 500px;
-  --lock-panel-padding: 48px 28px 28px;
-  --lock-disc-size: 88px;
-  --lock-disc-icon-size: 42px;
+  --popup-width: min(337px, 100vw);
+  --popup-height: 405px;
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 
-html, body {
+html,
+body {
   margin: 0;
   width: var(--popup-width);
-  min-height: var(--popup-min-height);
+  height: var(--popup-height);
   background: #ffffff;
 }
 
-body { overflow-x: hidden; overflow-y: auto; }
+body {
+  overflow: hidden;
+}
 
 .popup-shell {
-  min-height: var(--popup-min-height);
+  width: 100%;
+  height: 100%;
   display: grid;
   grid-template-rows: auto 1fr;
 }
@@ -39,108 +39,131 @@ body { overflow-x: hidden; overflow-y: auto; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 13px 15px;
-  border-bottom: 1px solid #e4e7ed;
-  box-shadow: 0 2px 8px rgba(17, 24, 39, .08);
+  padding: 12px 14px 11px;
+  border-bottom: 1px solid #d7dce5;
+  background: #fbfbfc;
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 9px;
+.brand-wordmark {
+  color: #121721;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
 }
-
-.brand-icon {
-  width: 30px;
-  height: 30px;
-}
-
-.brand div {
-  display: grid;
-  line-height: 1.08;
-}
-
-.brand strong { font-size: 15px; }
-.brand span { margin-top: 3px; color: #6c7586; font-size: 11px; }
 
 .status-pill {
-  min-width: 42px;
-  height: 25px;
+  min-width: 43px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 999px;
   background: #83dfc3;
-  color: white;
-  font-size: 17px;
+  color: #ffffff;
+  font-size: 21px;
   font-weight: 900;
+  line-height: 1;
 }
 
 .lock-panel {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: var(--lock-panel-padding);
+  padding: 8px 14px 12px;
   text-align: center;
 }
 
-.lock-disc {
-  width: var(--lock-disc-size);
-  height: var(--lock-disc-size);
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: #ff5e64;
-  color: #fff;
-  box-shadow: 0 12px 25px rgba(255, 94, 100, .22);
+.hero-row {
+  position: relative;
+  width: 100%;
+  min-height: 94px;
+  margin-top: 4px;
 }
 
-.lock-disc svg {
-  width: var(--lock-disc-icon-size);
-  height: var(--lock-disc-icon-size);
-  fill: currentColor;
+.hero-side {
+  display: none;
+}
+
+.lock-illustration {
+  display: block;
+  width: 94px;
+  height: 94px;
+  margin: 0 auto;
+  object-fit: contain;
+  image-rendering: auto;
+}
+
+.quick-block-link {
+  position: absolute;
+  top: 3px;
+  right: 0;
+  width: auto;
+  min-width: 0;
+  min-height: 32px;
+  padding: 7px 8px;
+  border: 1px solid #d6deea;
+  border-radius: 10px;
+  background: #f7f9fc;
+  color: #356fcf;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.quick-block-link:hover,
+.quick-block-link:focus-visible {
+  border-color: #4388ff;
+  background: #eef5ff;
+  color: #246be8;
+  outline: none;
 }
 
 h1 {
-  margin: 18px 0 8px;
-  font-size: 20px;
-  line-height: 1.2;
+  margin: 10px 0 0;
+  color: #102752;
+  font-size: 19px;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
 }
 
-.lock-panel > p {
-  margin: 0;
-  max-width: 250px;
-  color: #7a8495;
+.subtitle {
+  margin: 6px 0 0;
+  color: #111111;
   font-size: 14px;
-  line-height: 1.45;
+  line-height: 1.35;
 }
 
 form {
   width: 100%;
-  margin-top: 20px;
+  margin-top: 14px;
 }
 
 .input-row {
   display: grid;
-  grid-template-columns: 1fr 38px;
+  grid-template-columns: 1fr 44px;
   align-items: center;
   border: 1.5px solid #4388ff;
-  border-radius: 10px;
+  border-radius: 13px;
   overflow: hidden;
-  background: #fff;
+  background: #ffffff;
 }
 
 input {
   min-width: 0;
   border: 0;
   outline: 0;
-  padding: 12px 13px;
+  padding: 12px 14px;
   color: #172033;
   font: inherit;
   font-size: 13px;
 }
 
-input::placeholder { color: #a1a9b8; }
+input::placeholder {
+  color: #a1a9b8;
+}
 
 button {
   align-self: stretch;
@@ -150,8 +173,14 @@ button {
   cursor: pointer;
 }
 
-button:hover { color: #4388ff; }
-button:disabled { cursor: wait; opacity: .55; }
+button:hover {
+  color: #4388ff;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: .55;
+}
 
 button svg {
   width: 24px;
@@ -171,42 +200,17 @@ button svg {
 }
 
 .hint {
-  margin-top: 14px !important;
-  color: #9aa3b2 !important;
-  font-size: 11px !important;
-}
-
-@media (max-height: 560px) {
-  :root[data-platform="android"] .lock-panel { padding-top: 24px; }
-  :root[data-platform="android"] .lock-disc { width: 72px; height: 72px; }
-}
-
-.quick-block-link {
-  align-self: center;
-  min-height: 38px;
-  margin-top: 14px;
-  padding: 8px 12px;
-  border: 1px solid #d6deea;
-  border-radius: 10px;
-  background: #f7f9fc;
-  color: #356fcf;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.quick-block-link:hover,
-.quick-block-link:focus-visible {
-  border-color: #4388ff;
-  background: #eef5ff;
-  color: #246be8;
+  margin: 0;
+  max-width: 265px;
+  color: #9aa3b2;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .extension-update-area {
   width: 100%;
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid #e4e7ed;
+  margin-top: auto;
+  padding-top: 10px;
 }
 
 .extension-update-button {
@@ -214,12 +218,13 @@ button svg {
   min-height: 40px;
   padding: 9px 13px;
   border: 1px solid #cbd5e1;
-  border-radius: 10px;
+  border-radius: 11px;
   background: #f8fafc;
   color: #245fc5;
   font: inherit;
   font-size: 12px;
   font-weight: 800;
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
 }
 
 .extension-update-button:hover,
@@ -227,21 +232,17 @@ button svg {
   border-color: #4388ff;
   background: #eef5ff;
   color: #246be8;
+  outline: none;
 }
 
 .extension-update-button:disabled {
   cursor: wait;
-  opacity: .65;
+  opacity: 0.65;
 }
 
-.extension-update-status {
-  min-height: 18px;
-  margin: 8px 2px 0;
-  color: #7a8495;
+.enhancer-version {
+  margin: 8px 0 0;
+  color: #b0b7c4;
   font-size: 11px;
   line-height: 1.35;
 }
-
-.extension-update-status[data-state="success"] { color: #047857; }
-.extension-update-status[data-state="error"] { color: #b91c1c; }
-
