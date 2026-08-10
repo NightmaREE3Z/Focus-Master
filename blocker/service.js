@@ -14,7 +14,7 @@ import {
   unlockAdminTab,
   verifyPassword
 } from './auth.js';
-import { findBlockReason } from './matcher.js';
+import { findBlockReason, hasScopedLinkRulesForUrl } from './matcher.js';
 import { findBlockedHost, initializeHosts } from './hosts.js';
 import {
   downloadGitHubLists,
@@ -23,6 +23,7 @@ import {
   queueRemoteOperation,
   queueRemoteSnapshot,
   saveGitHubSyncConfig,
+  SYNC_PROFILES,
   uploadGitHubLists
 } from './github-sync.js';
 import {
@@ -149,17 +150,28 @@ async function sendNativeBlockLog(reason, sourceUrl, redirectTarget = '') {
 
   const browserInfo = await parseChromiumBrowserInfo();
   const manifest = browser.runtime.getManifest();
+  const reasonType = reason.type || (blockedWord ? 'term' : 'unknown');
+  const reasonDetail = reasonType === 'host'
+    ? 'Focus Master fetched-hosts matcher'
+    : reasonType === 'link'
+      ? 'Focus Master blocked-link matcher'
+      : 'Focus Master blocked-term matcher';
+  const context = reasonType === 'host'
+    ? 'fetched-host'
+    : reasonType === 'link'
+      ? 'blocked-link'
+      : 'blocked-term';
   const payload = {
     type: 'BRAVEFOX_REDIRECT_LOG',
     source: NATIVE_LOG_SOURCE,
     sourceCode: NATIVE_LOG_SOURCE_CODE,
     extensionName: manifest.name || '',
     extensionVersion: manifest.version || '',
-    reasonType: reason.type || (blockedWord ? 'term' : 'unknown'),
-    reasonDetail: reason.type === 'link' ? 'Focus Master blocked-link matcher' : 'Focus Master blocked-term matcher',
+    reasonType,
+    reasonDetail,
     blockedWord,
     attemptedSearch,
-    context: reason.type === 'link' ? 'blocked-link' : 'blocked-term',
+    context,
     pageUrl,
     referrer: cleanNativeLogText(redirectTarget, 1000),
     timestamp: new Date().toISOString(),
@@ -218,6 +230,27 @@ async function requireAdminAccess(sender) {
 }
 
 function publicCounts(dataset) { return { termCount: dataset.terms.length, linkCount: dataset.links.length }; }
+
+function consoleClockTime() {
+  return new Date().toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+}
+
+function logLoadedBlocklists(dataset) {
+  const profile = SYNC_PROFILES?.[dataset?.profile] || null;
+  const profileLabel = profile?.label || dataset?.profile || 'Unknown';
+  const termsFile = profile?.termsFile || 'blockedTerms.csv';
+  const termCount = Array.isArray(dataset?.terms) ? dataset.terms.length : 0;
+  const linkCount = Array.isArray(dataset?.links) ? dataset.links.length : 0;
+  console.log(
+    `[${consoleClockTime()}] Blocklists loaded: ${termsFile} (${termCount} terms), ` +
+    `blockedLinks.csv (${linkCount} links) — profile ${profileLabel}`
+  );
+}
 function publicStorageStatus(dataset) {
   return {
     syncPending: Boolean(dataset.syncPending),
@@ -361,35 +394,66 @@ function blockedPageUrl(reason, sourceUrl) {
 
 async function evaluateNavigation(tabId, url, title = '') {
   if (!Number.isInteger(tabId) || tabId < 0) return;
-  if (!isSupportedWebUrl(url) || isCompletelyExcludedUrl(url)) return;
+  if (!isSupportedWebUrl(url)) return;
+  await initializeTrustedSites();
   if (shouldBypassRedirect(tabId, url) || redirectInFlight.has(tabId)) return;
   const last = recentlyRedirected.get(tabId);
   if (last && last.url === url && Date.now() - last.at < 1500) return;
 
-  const [dataset, settings, blockedHost] = await Promise.all([
+  const [dataset, settings] = await Promise.all([
     loadDataset(),
-    getSettings(),
-    findBlockedHost(url)
+    getSettings()
   ]);
-  const reason = blockedHost
-    ? { type: 'link', trigger: blockedHost, attemptedSearch: '' }
-    : findBlockReason({ url, title }, dataset, settings);
-  if (!reason) return;
 
+  // Priority 1: the user's own Blocker terms/links. These deliberately outrank
+  // TrustedSites.csv, so an explicit blockedLinks.csv entry can still block a
+  // trusted host (including a bare whole-host rule such as "xvideos.com").
+  const reason = findBlockReason({ url, title }, dataset, settings);
+  if (reason) {
+    redirectInFlight.add(tabId);
+    recentlyRedirected.set(tabId, { url, at: Date.now() });
+    try {
+      const directTarget = configuredRedirectTarget(reason, settings, url);
+      sendNativeBlockLog(reason, url, directTarget);
+      if (directTarget) {
+        redirectLandingBypass.set(tabId, { url: directTarget, expiresAt: Date.now() + 15_000 });
+        await browser.tabs.update(tabId, { url: directTarget });
+      } else {
+        await browser.tabs.update(tabId, { url: blockedPageUrl(reason, url) });
+      }
+      try { await browser.history.deleteUrl({ url }); } catch {}
+    } catch (error) {
+      console.warn('[BraveFox Focus Master] Redirect failed:', error);
+    } finally {
+      redirectInFlight.delete(tabId);
+    }
+    return;
+  }
+
+  // Priority 2: trusted sites are exempt only from the broad fetched-hosts
+  // layer. They are NOT exempt from the manual Blocker rules above.
+  if (isCompletelyExcludedUrl(url)) return;
+
+  // A host with path/query-specific blockedLinks.csv rules is intentionally
+  // being controlled surgically. Do not let fetchedHosts turn those specific
+  // rules into an accidental whole-domain block. A bare host rule would have
+  // matched at Priority 1 and returned above.
+  if (settings.enabled && settings.blockLinks && hasScopedLinkRulesForUrl(url, dataset.links)) return;
+
+  // Priority 3: fetched hosts are the blunt fallback. They do not redirect to
+  // the Blocker page; attempting to open one simply closes that tab.
+  const blockedHost = await findBlockedHost(url);
+  if (!blockedHost) return;
+
+  const hostReason = { type: 'host', trigger: blockedHost, attemptedSearch: '' };
   redirectInFlight.add(tabId);
   recentlyRedirected.set(tabId, { url, at: Date.now() });
   try {
-    const directTarget = configuredRedirectTarget(reason, settings, url);
-    sendNativeBlockLog(reason, url, directTarget);
-    if (directTarget) {
-      redirectLandingBypass.set(tabId, { url: directTarget, expiresAt: Date.now() + 15_000 });
-      await browser.tabs.update(tabId, { url: directTarget });
-    } else {
-      await browser.tabs.update(tabId, { url: blockedPageUrl(reason, url) });
-    }
+    sendNativeBlockLog(hostReason, url, '');
     try { await browser.history.deleteUrl({ url }); } catch {}
+    await browser.tabs.remove(tabId);
   } catch (error) {
-    console.warn('[BraveFox Focus Master] Redirect failed:', error);
+    console.warn('[BraveFox Focus Master] Fetched-host tab close failed:', error);
   } finally {
     redirectInFlight.delete(tabId);
   }
@@ -597,10 +661,12 @@ void (async () => {
   try {
     await initializeTrustedSites();
     await initializeGitHubSync();
-    await loadDataset({ force: true });
+    const dataset = await loadDataset({ force: true });
+    logLoadedBlocklists(dataset);
   } catch (error) {
     console.warn('[BraveFox Focus Master] Startup initialization failed:', error);
   }
 })();
 void initializeHosts().catch(error => console.warn('[BraveFox Focus Master] Hosts initialization failed:', error));
-console.log(`[BraveFox Focus Master] Module ${BLOCKER_VERSION} initialized with local lists, browser profile mirroring, cross-browser GitHub sync, and bundled fallbacks.`);
+const startupVersion = browser.runtime.getManifest().version;
+console.log(`[${consoleClockTime()}] BraveFox Focus Master ${startupVersion} initialized`);

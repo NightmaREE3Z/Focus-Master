@@ -1,5 +1,4 @@
 import {
-  isCompletelyExcludedUrl,
   isSupportedWebUrl,
   normalizeSearchable
 } from './shared.js';
@@ -56,15 +55,102 @@ function isGoogleHost(host) {
   return /^google\.[a-z0-9.-]+$/i.test(value);
 }
 
+function normalizeRuleHost(value) {
+  return String(value || '')
+    .trim()
+    .toLocaleLowerCase('en-US')
+    .replace(/^www\./, '')
+    .replace(/\.$/, '');
+}
+
+function normalizeRulePath(value) {
+  let path = String(value || '/').trim().toLocaleLowerCase('en-US') || '/';
+  if (!path.startsWith('/')) path = `/${path}`;
+  path = path.replace(/\/{2,}/g, '/');
+  if (path.length > 1) path = path.replace(/\/$/, '');
+  return path;
+}
+
+function normalizeQueryValue(value) {
+  return String(value ?? '')
+    .normalize('NFKC')
+    .trim()
+    .toLocaleLowerCase('en-US');
+}
+
 function parsedCandidate(urlValue) {
   const url = new URL(urlValue);
-  const host = url.hostname.toLocaleLowerCase('en-US').replace(/^www\./, '').replace(/\.$/, '');
-  const pathAndQuery = `${url.pathname === '/' ? '' : url.pathname.replace(/\/$/, '')}${url.search || ''}`;
-  return { url, host, canonical: `${host}${pathAndQuery}`.toLocaleLowerCase('en-US') };
+  const host = normalizeRuleHost(url.hostname);
+  return { url, host };
+}
+
+function parseStructuredLinkRule(stored) {
+  const raw = String(stored || '').trim();
+  if (!raw || raw.includes('*')) return null;
+  try {
+    const url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    const host = normalizeRuleHost(url.hostname);
+    if (!host) return null;
+    const path = normalizeRulePath(url.pathname);
+    const query = [];
+    for (const [key, value] of url.searchParams.entries()) {
+      query.push({
+        key: String(key || '').toLocaleLowerCase('en-US'),
+        value: normalizeQueryValue(value)
+      });
+    }
+    return {
+      host,
+      path,
+      hasPath: path !== '/',
+      query,
+      hasQuery: query.length > 0,
+      wholeHost: path === '/' && query.length === 0
+    };
+  } catch {
+    return null;
+  }
+}
+
+function pathRuleMatches(candidatePath, rulePath) {
+  const path = normalizeRulePath(candidatePath);
+  const prefix = normalizeRulePath(rulePath);
+  if (prefix === '/') return true;
+  return path === prefix || path.startsWith(`${prefix}/`);
+}
+
+function candidateQueryMap(url) {
+  const map = new Map();
+  for (const [rawKey, rawValue] of url.searchParams.entries()) {
+    const key = String(rawKey || '').toLocaleLowerCase('en-US');
+    const values = map.get(key) || [];
+    values.push(normalizeQueryValue(rawValue));
+    map.set(key, values);
+  }
+  return map;
+}
+
+function queryRuleMatches(candidateUrl, ruleEntries) {
+  if (!ruleEntries.length) return true;
+  const candidate = candidateQueryMap(candidateUrl);
+  for (const rule of ruleEntries) {
+    const values = candidate.get(rule.key);
+    if (!values?.length) return false;
+    // A valueless rule such as "&top" means the parameter merely has to exist.
+    if (rule.value && !values.includes(rule.value)) return false;
+  }
+  return true;
+}
+
+function structuredLinkRuleMatches(candidate, rule) {
+  if (!hostMatches(candidate.host, rule.host)) return false;
+  if (rule.hasPath && !pathRuleMatches(candidate.url.pathname, rule.path)) return false;
+  return queryRuleMatches(candidate.url, rule.query);
 }
 
 export function matchLink(urlValue, links) {
-  if (!isSupportedWebUrl(urlValue) || isCompletelyExcludedUrl(urlValue)) return null;
+  if (!isSupportedWebUrl(urlValue)) return null;
   let candidate;
   try {
     candidate = parsedCandidate(urlValue);
@@ -73,22 +159,47 @@ export function matchLink(urlValue, links) {
   }
 
   for (const stored of links) {
-    const rule = String(stored || '').trim().toLocaleLowerCase('en-US');
-    if (!rule) continue;
+    const raw = String(stored || '').trim();
+    if (!raw) continue;
 
-    if (rule.includes('*')) {
-      if (wildcardRegex(rule).test(candidate.canonical)) return stored;
+    if (raw.includes('*')) {
+      const canonical = `${candidate.host}${candidate.url.pathname === '/' ? '' : normalizeRulePath(candidate.url.pathname)}${candidate.url.search || ''}`
+        .toLocaleLowerCase('en-US');
+      const normalizedRule = raw
+        .replace(/^https?:\/\//i, '')
+        .replace(/^www\./i, '')
+        .toLocaleLowerCase('en-US');
+      if (wildcardRegex(normalizedRule).test(canonical)) return stored;
       continue;
     }
 
-    const slash = rule.indexOf('/');
-    const ruleHost = slash === -1 ? rule : rule.slice(0, slash);
-    const ruleTail = slash === -1 ? '' : rule.slice(slash);
-    const hostMatchesRule = candidate.host === ruleHost || candidate.host.endsWith(`.${ruleHost}`);
-    if (!hostMatchesRule) continue;
-    if (!ruleTail || candidate.canonical.startsWith(`${candidate.host}${ruleTail}`)) return stored;
+    const rule = parseStructuredLinkRule(raw);
+    if (rule && structuredLinkRuleMatches(candidate, rule)) return stored;
   }
   return null;
+}
+
+// A host with path/query-specific Blocker link rules is intentionally under
+// surgical control. In that case the blunt fetched-hosts layer must not block
+// the whole host. Adding a bare host rule (for example "xvideos.com") still
+// wins at the Blocker Links tier before this helper is consulted.
+export function hasScopedLinkRulesForUrl(urlValue, links) {
+  if (!isSupportedWebUrl(urlValue)) return false;
+  let candidate;
+  try {
+    candidate = parsedCandidate(urlValue);
+  } catch {
+    return false;
+  }
+
+  let hasSpecificRule = false;
+  for (const stored of links) {
+    const rule = parseStructuredLinkRule(stored);
+    if (!rule || !hostMatches(candidate.host, rule.host)) continue;
+    if (rule.wholeHost) return false;
+    if (rule.hasPath || rule.hasQuery) hasSpecificRule = true;
+  }
+  return hasSpecificRule;
 }
 
 function decodePathText(pathname) {
@@ -159,12 +270,7 @@ export function extractTermCandidates({ url, title = '' }) {
 }
 
 function tokenMatches(candidate, token) {
-  if (token.length > 3) return candidate.includes(token);
-  try {
-    return new RegExp(`(?:^|\\s)${token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:$|\\s)`, 'i').test(candidate);
-  } catch {
-    return candidate.includes(token);
-  }
+  return candidate.includes(token);
 }
 
 function termMatchesCandidate(candidateValue, storedTerm) {
@@ -180,7 +286,7 @@ function termMatchesCandidate(candidateValue, storedTerm) {
 }
 
 export function matchTerm({ url, title = '' }, terms) {
-  if (!isSupportedWebUrl(url) || isCompletelyExcludedUrl(url)) return null;
+  if (!isSupportedWebUrl(url)) return null;
   const candidates = extractTermCandidates({ url, title });
   if (!candidates.length) return null;
 
@@ -191,7 +297,7 @@ export function matchTerm({ url, title = '' }, terms) {
 }
 
 export function findBlockReason({ url, title = '' }, dataset, settings) {
-  if (!settings.enabled || !isSupportedWebUrl(url) || isCompletelyExcludedUrl(url)) return null;
+  if (!settings.enabled || !isSupportedWebUrl(url)) return null;
   if (settings.blockLinks) {
     const link = matchLink(url, dataset.links);
     if (link) return { type: 'link', trigger: link, attemptedSearch: extractAttemptedSearch(url) };

@@ -1,5 +1,3 @@
-import { COMPLETE_EXCLUSION_HOSTS, COMPLETE_EXCLUSION_PATH_RULES } from './constants.js';
-
 const browserApi = globalThis.browser ?? globalThis.chrome;
 const LOG_PREFIX = '[BraveFox Focus Master Trusted Sites]';
 const REMOTE_URL = 'https://raw.githubusercontent.com/NightmaREE3Z/Focus-Master/refs/heads/BraveFox/blocker/lists/TrustedSites.csv';
@@ -12,14 +10,11 @@ const MIN_VALID_ENTRIES = 20;
 
 const listeners = new Set();
 let initializedPromise = null;
-let domains = new Set(COMPLETE_EXCLUSION_HOSTS.map(normalizeHost).filter(Boolean));
-let pathRules = COMPLETE_EXCLUSION_PATH_RULES.map(rule => ({
-  host: normalizeHost(rule.host),
-  pathPrefix: normalizePathPrefix(rule.pathPrefix)
-})).filter(rule => rule.host && rule.pathPrefix);
+let domains = new Set();
+let pathRules = [];
 let status = {
-  source: 'compiled-fallback',
-  count: domains.size + pathRules.length,
+  source: 'not-loaded',
+  count: 0,
   lastUpdated: 0,
   lastError: ''
 };
@@ -175,11 +170,14 @@ export async function refreshTrustedSites({ reason = 'automatic' } = {}) {
     await writeStatus();
     return getTrustedSitesStatus();
   } catch (fallbackError) {
-    status = {
-      ...status,
-      source: 'compiled-fallback',
-      lastError: `Remote, cached and bundled trusted-site loading failed: ${String(fallbackError?.message || fallbackError)}`
-    };
+    applyTrustedSites(
+      { domains: [], pathRules: [] },
+      {
+        source: 'unavailable',
+        lastUpdated: Date.now(),
+        lastError: `Remote, cached and bundled trusted-site loading failed: ${String(fallbackError?.message || fallbackError)}`
+      }
+    );
     await writeStatus();
     return getTrustedSitesStatus();
   }
