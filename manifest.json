@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BraveFox Focus Master",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAptMNNnQ8FKddlN7DCwG8g23GyMA0avCebhx49OcbZl0pg4BfqQVe7V2Ec3gdjWjxOYu+PF75Pm3TRyuoBAJJV74b9hcH5l0hZJ+AaM5C893eUcqtHL7uO9Yk4Ded7NW8Ag9/IHdmH2yiN+L/r2e7ibF2ck3uKpillwWBbNJFOpS0WpdptVmluDmgBW8aAo7dzD47+kDxDffG0a/6n9mXqDWOtH86+s0O1KUwgpyS+4s79WKr2Nyt/sCqhObCqHzWaAFp1CcRMF0q3agHv5/Fy0+FzLXvc1PkZ2oVJYse9Wm2ha7471Ulifcm1YZEN0hZVJwm618B0VV8XuOljSQMtwIDAQAB",
   "description": "A private/personal use, account-based blocklist for terms and links.",
   "background": {

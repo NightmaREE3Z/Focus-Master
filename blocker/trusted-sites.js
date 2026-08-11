@@ -30,6 +30,11 @@ function normalizePathPrefix(value) {
   return path || '/';
 }
 
+function usesCaseInsensitivePaths(host) {
+  const normalizedHost = normalizeHost(host);
+  return normalizedHost === 'reddit.com' || normalizedHost.endsWith('.reddit.com');
+}
+
 function parseCsvLine(line) {
   const fields = [];
   let current = '';
@@ -65,7 +70,8 @@ export function parseTrustedSitesCsv(text) {
     if (type === 'path') {
       const host = normalizeHost(fields[1]);
       const pathPrefix = normalizePathPrefix(fields[2]);
-      const key = `${host}\n${pathPrefix}`;
+      const keyPath = usesCaseInsensitivePaths(host) ? pathPrefix.toLowerCase() : pathPrefix;
+      const key = `${host}\n${keyPath}`;
       if (host && host.includes('.') && !pathKeys.has(key)) {
         pathKeys.add(key);
         nextPaths.push({ host, pathPrefix });
@@ -83,9 +89,13 @@ export function parseTrustedSitesCsv(text) {
   return { domains: [...nextDomains], pathRules: nextPaths };
 }
 
-function pathPrefixMatches(pathname, prefix) {
-  const path = String(pathname || '/').replace(/\/{2,}/g, '/');
-  const normalized = normalizePathPrefix(prefix);
+function pathPrefixMatches(pathname, prefix, { caseInsensitive = false } = {}) {
+  let path = String(pathname || '/').replace(/\/{2,}/g, '/');
+  let normalized = normalizePathPrefix(prefix);
+  if (caseInsensitive) {
+    path = path.toLowerCase();
+    normalized = normalized.toLowerCase();
+  }
   return path === normalized || path.startsWith(`${normalized}/`);
 }
 
@@ -209,7 +219,10 @@ export function isTrustedUrl(value) {
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
     const host = normalizeHost(parsed.hostname);
     if (isTrustedHostname(host)) return true;
-    return pathRules.some(rule => host === rule.host && pathPrefixMatches(parsed.pathname, rule.pathPrefix));
+    return pathRules.some(rule =>
+      host === rule.host &&
+      pathPrefixMatches(parsed.pathname, rule.pathPrefix, { caseInsensitive: usesCaseInsensitivePaths(host) })
+    );
   } catch { return false; }
 }
 

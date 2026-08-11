@@ -400,14 +400,18 @@ async function evaluateNavigation(tabId, url, title = '') {
   const last = recentlyRedirected.get(tabId);
   if (last && last.url === url && Date.now() - last.at < 1500) return;
 
+  // Priority 1: TrustedSites.csv is a true allow-list. A domain entry exempts
+  // that entire domain (including subdomains and every path/query) from all
+  // Focus Master blocking layers. A path entry exempts only its matching path.
+  if (isCompletelyExcludedUrl(url)) return;
+
   const [dataset, settings] = await Promise.all([
     loadDataset(),
     getSettings()
   ]);
 
-  // Priority 1: the user's own Blocker terms/links. These deliberately outrank
-  // TrustedSites.csv, so an explicit blockedLinks.csv entry can still block a
-  // trusted host (including a bare whole-host rule such as "xvideos.com").
+  // Priority 2: the user's own Blocker terms/links apply only after trusted
+  // URLs have been exempted above.
   const reason = findBlockReason({ url, title }, dataset, settings);
   if (reason) {
     redirectInFlight.add(tabId);
@@ -430,14 +434,10 @@ async function evaluateNavigation(tabId, url, title = '') {
     return;
   }
 
-  // Priority 2: trusted sites are exempt only from the broad fetched-hosts
-  // layer. They are NOT exempt from the manual Blocker rules above.
-  if (isCompletelyExcludedUrl(url)) return;
-
   // A host with path/query-specific blockedLinks.csv rules is intentionally
   // being controlled surgically. Do not let fetchedHosts turn those specific
   // rules into an accidental whole-domain block. A bare host rule would have
-  // matched at Priority 1 and returned above.
+  // matched at Priority 2 and returned above.
   if (settings.enabled && settings.blockLinks && hasScopedLinkRulesForUrl(url, dataset.links)) return;
 
   // Priority 3: fetched hosts are the blunt fallback. They do not redirect to
