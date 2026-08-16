@@ -4,14 +4,25 @@ import {
   parseFullBackup,
   parseListText,
   serializeFullBackup,
-  serializeListCsv
+  serializeListCsv,
+  serializeListForKind
 } from './csv.js';
-import { downloadText, normalizeLinkForStorage, normalizeRedirectUrl, normalizeTerm } from './shared.js';
+import {
+  downloadText,
+  normalizeLinkForStorage,
+  normalizeRedirectUrl,
+  normalizeTerm,
+  normalizeTldForStorage
+} from './shared.js';
+import { normalizeTrustedSiteEntry, parseTrustedSiteEntry } from './trusted-sites.js';
 
 const state = {
   view: 'terms',
   terms: [],
   links: [],
+  tlds: [],
+  trustedSites: [],
+  trustedSiteFilter: 'domain',
   settings: {},
   storageStatus: {},
   githubSync: null,
@@ -70,13 +81,55 @@ function toast(text) {
   toastTimer = setTimeout(() => elements.toast?.classList.remove('show'), 2600);
 }
 
-function currentValues() {
-  return state.view === 'links' ? state.links : state.terms;
+function valuesForKind(kind) {
+  return Array.isArray(state[kind]) ? state[kind] : [];
+}
+
+function currentSingleKind() {
+  return state.view === 'trustedSites' ? 'trustedSites' : 'terms';
+}
+
+function normalizerForKind(kind) {
+  if (kind === 'links') return normalizeLinkForStorage;
+  if (kind === 'tlds') return normalizeTldForStorage;
+  if (kind === 'trustedSites') return normalizeTrustedSiteEntry;
+  return normalizeTerm;
+}
+
+function kindLabel(kind, count = 1) {
+  const plural = count === 1 ? '' : 's';
+  if (kind === 'links') return `link${plural}`;
+  if (kind === 'tlds') return `TLD${plural}`;
+  if (kind === 'trustedSites') return `trusted site rule${plural}`;
+  return `term${plural}`;
+}
+
+function exportNameForKind(kind) {
+  if (kind === 'links') return 'BraveFox-Blocker-Links.csv';
+  if (kind === 'tlds') return 'BraveFox-Blocker-TLDs.csv';
+  if (kind === 'trustedSites') return 'BraveFox-TrustedSites.csv';
+  return 'BraveFox-Blocker-Terms.csv';
+}
+
+function displayEntry(kind, value) {
+  if (kind !== 'trustedSites') return { text: value, badge: kind === 'links' ? 'LINK' : kind === 'tlds' ? 'TLD' : '', badgeClass: kind };
+  const descriptor = parseTrustedSiteEntry(value);
+  if (!descriptor) return { text: value, badge: 'RULE', badgeClass: 'domain' };
+  return {
+    text: descriptor.type === 'path' ? `${descriptor.host}${descriptor.pathPrefix}` : descriptor.host,
+    badge: descriptor.type.toUpperCase(),
+    badgeClass: descriptor.type,
+    title: descriptor.type === 'domain'
+      ? 'Trusted domain: includes this domain and all subdomains.'
+      : 'Trusted path: exact host plus this path tree.'
+  };
 }
 
 function applyResponse(response) {
   if (Array.isArray(response.terms)) state.terms = response.terms;
   if (Array.isArray(response.links)) state.links = response.links;
+  if (Array.isArray(response.tlds)) state.tlds = response.tlds;
+  if (Array.isArray(response.trustedSites)) state.trustedSites = response.trustedSites;
   if (response.settings && typeof response.settings === 'object') state.settings = response.settings;
   if (response.storageStatus && typeof response.storageStatus === 'object') state.storageStatus = response.storageStatus;
   if (response.githubSync && typeof response.githubSync === 'object') state.githubSync = response.githubSync;
@@ -107,51 +160,126 @@ function renderStorageStatus() {
     elements.syncLabel.title = state.storageStatus.syncError || 'The browser will retry its profile mirror.';
   } else {
     elements.syncLabel.textContent = 'Local lists active — GitHub sync available';
-    elements.syncLabel.title = 'Open Sync to configure public GitHub blocklist synchronization.';
+    elements.syncLabel.title = 'Open Sync to configure public GitHub list synchronization.';
+  }
+}
+
+function trustedSiteTypeCounts() {
+  const counts = { domain: 0, path: 0 };
+  for (const value of state.trustedSites) {
+    const descriptor = parseTrustedSiteEntry(value);
+    if (descriptor?.type === 'domain' || descriptor?.type === 'path') counts[descriptor.type] += 1;
+  }
+  return counts;
+}
+
+function updateTrustedTypeFilterUi() {
+  if (!elements.trustedTypeFilter) return;
+  const counts = trustedSiteTypeCounts();
+  const selected = state.trustedSiteFilter === 'path' ? 'path' : 'domain';
+  state.trustedSiteFilter = selected;
+  elements.trustedTypeFilter.value = selected;
+  elements.trustedTypeFilter.classList.toggle('domain', selected === 'domain');
+  elements.trustedTypeFilter.classList.toggle('path', selected === 'path');
+  const domainOption = elements.trustedTypeFilter.querySelector('option[value="domain"]');
+  const pathOption = elements.trustedTypeFilter.querySelector('option[value="path"]');
+  if (domainOption) domainOption.textContent = `DOMAIN · ${counts.domain}`;
+  if (pathOption) pathOption.textContent = `PATH · ${counts.path}`;
+  if (elements.searchInput && state.view === 'trustedSites') {
+    elements.searchInput.placeholder = selected === 'domain' ? 'Search trusted domains' : 'Search trusted paths';
   }
 }
 
 function renderCounts() {
-  elements.termCount.textContent = state.terms.length;
-  elements.linkCount.textContent = state.links.length;
+  if (elements.termCount) elements.termCount.textContent = state.terms.length;
+  if (elements.linkTldCount) elements.linkTldCount.textContent = state.links.length + state.tlds.length;
+  if (elements.trustedSiteCount) elements.trustedSiteCount.textContent = state.trustedSites.length;
+  if (elements.linkSectionCount) elements.linkSectionCount.textContent = state.links.length;
+  if (elements.tldSectionCount) elements.tldSectionCount.textContent = state.tlds.length;
+  updateTrustedTypeFilterUi();
 }
 
-function renderList() {
-  const search = elements.searchInput.value.trim().toLocaleLowerCase('en-US');
-  const values = currentValues().filter(value => !search || value.toLocaleLowerCase('en-US').includes(search));
-  elements.items.replaceChildren();
-  elements.emptyState.hidden = values.length > 0;
-
-  const fragment = document.createDocumentFragment();
-  for (const value of values) {
-    const row = document.createElement('div');
-    row.className = 'item';
-    row.setAttribute('role', 'listitem');
-
-    const label = document.createElement('div');
-    label.className = 'item-value';
-    label.textContent = value;
-
-    const remove = document.createElement('button');
-    remove.className = 'remove-button';
-    remove.textContent = 'Remove';
-    remove.addEventListener('click', async () => {
-      if (!confirm(`Remove “${value}”?`)) return;
-      try {
-        const response = await message({ type: MESSAGE.removeItem, kind: state.view, value });
-        applyResponse(response);
-        renderCounts();
-        renderList();
-        toast('Entry removed; GitHub sync queued.');
-      } catch (error) {
-        if (!lockingOut) toast(error.message);
-      }
-    });
-
-    row.append(label, remove);
-    fragment.appendChild(row);
+async function removeEntry(kind, value) {
+  const display = displayEntry(kind, value).text;
+  if (!confirm(`Remove “${display}”?`)) return;
+  try {
+    const response = await message({ type: MESSAGE.removeItem, kind, value });
+    applyResponse(response);
+    renderCounts();
+    renderCurrentView();
+    toast('Entry removed; GitHub sync queued.');
+  } catch (error) {
+    if (!lockingOut) toast(error.message);
   }
-  elements.items.appendChild(fragment);
+}
+
+function makeListRow(kind, value) {
+  const row = document.createElement('div');
+  row.className = 'item';
+  row.setAttribute('role', 'listitem');
+
+  const main = document.createElement('div');
+  main.className = 'item-main';
+  const display = displayEntry(kind, value);
+  if (display.badge) {
+    const badge = document.createElement('span');
+    badge.className = `item-kind-badge ${display.badgeClass || ''}`.trim();
+    badge.textContent = display.badge;
+    if (display.title) badge.title = display.title;
+    main.appendChild(badge);
+  }
+
+  const label = document.createElement('div');
+  label.className = 'item-value';
+  label.textContent = display.text;
+  if (display.title) label.title = display.title;
+  main.appendChild(label);
+
+  const remove = document.createElement('button');
+  remove.className = 'remove-button';
+  remove.textContent = 'Remove';
+  remove.addEventListener('click', () => void removeEntry(kind, value));
+
+  row.append(main, remove);
+  return row;
+}
+
+function renderListInto(kind, searchElement, itemsElement, emptyElement, predicate = null) {
+  if (!searchElement || !itemsElement || !emptyElement) return;
+  const search = searchElement.value.trim().toLocaleLowerCase('en-US');
+  const values = valuesForKind(kind).filter(value => {
+    if (predicate && !predicate(value)) return false;
+    if (!search) return true;
+    const display = displayEntry(kind, value).text.toLocaleLowerCase('en-US');
+    return display.includes(search) || String(value).toLocaleLowerCase('en-US').includes(search);
+  });
+  itemsElement.replaceChildren();
+  emptyElement.hidden = values.length > 0;
+  const fragment = document.createDocumentFragment();
+  for (const value of values) fragment.appendChild(makeListRow(kind, value));
+  itemsElement.appendChild(fragment);
+}
+
+function renderSingleList() {
+  if (state.view === 'trustedSites') {
+    updateTrustedTypeFilterUi();
+    const selected = state.trustedSiteFilter;
+    elements.emptyState.textContent = selected === 'domain' ? 'No trusted domains yet.' : 'No trusted paths yet.';
+    renderListInto('trustedSites', elements.searchInput, elements.items, elements.emptyState, value => parseTrustedSiteEntry(value)?.type === selected);
+    return;
+  }
+  elements.emptyState.textContent = 'No entries yet.';
+  renderListInto('terms', elements.searchInput, elements.items, elements.emptyState);
+}
+
+function renderSplitLists() {
+  renderListInto('links', elements.linkSearchInput, elements.linkItems, elements.linkEmptyState);
+  renderListInto('tlds', elements.tldSearchInput, elements.tldItems, elements.tldEmptyState);
+}
+
+function renderCurrentView() {
+  if (state.view === 'links') renderSplitLists();
+  else if (state.view === 'terms' || state.view === 'trustedSites') renderSingleList();
 }
 
 function selectView(view) {
@@ -159,24 +287,36 @@ function selectView(view) {
   for (const button of document.querySelectorAll('.nav-button')) {
     button.classList.toggle('active', button.dataset.view === view);
   }
+
   const settings = view === 'settings';
-  elements.listView.hidden = settings;
+  const split = view === 'links';
+  const single = view === 'terms' || view === 'trustedSites';
+  elements.singleListView.hidden = !single;
+  elements.linksTldsView.hidden = !split;
   elements.settingsView.hidden = !settings;
+  if (elements.trustedTypeBar) elements.trustedTypeBar.hidden = view !== 'trustedSites';
 
   if (view === 'terms') {
     elements.viewTitle.textContent = 'Blocked terms';
     elements.viewSubtitle.textContent = 'Manage words and phrases that trigger blocking.';
     elements.addInput.placeholder = 'Add a term or phrase';
+    elements.searchInput.placeholder = 'Search the list';
+    elements.singleListOrderNote.textContent = 'Order follows the CSV. Merge imports append new unique entries; manual additions go to the end.';
   } else if (view === 'links') {
-    elements.viewTitle.textContent = 'Blocked links';
-    elements.viewSubtitle.textContent = 'Manage domains, website paths and URL patterns.';
-    elements.addInput.placeholder = 'Add a domain or URL';
+    elements.viewTitle.textContent = 'Blocked links / TLDs';
+    elements.viewSubtitle.textContent = 'Keep exact URL rules separate from hostname-suffix TLD rules.';
+  } else if (view === 'trustedSites') {
+    elements.viewTitle.textContent = 'Trusted sites';
+    elements.viewSubtitle.textContent = 'Allow trusted domains or specific path trees before every blocking layer.';
+    elements.addInput.placeholder = 'Add a domain or URL/path to trust';
+    updateTrustedTypeFilterUi();
+    elements.singleListOrderNote.textContent = 'DOMAIN trusts the domain plus subdomains. PATH trusts only the exact host and that path tree.';
   } else {
     elements.viewTitle.textContent = 'Settings';
     elements.viewSubtitle.textContent = 'Password-protected enforcement controls, synchronization and backups.';
     void renderAdminState();
   }
-  if (!settings) renderList();
+  renderCurrentView();
 }
 
 function getTemplate(id) {
@@ -291,7 +431,7 @@ function syncStatusText(sync = state.githubSync) {
   lines.push(`Pending changes: ${Number(sync.pendingCount) || 0}`);
   if (sync.lastSyncAt) lines.push(`Last sync: ${new Date(sync.lastSyncAt).toLocaleString()} — ${sync.lastAction || 'completed'}`);
   else lines.push('Last sync: never');
-  if (sync.trustedSites) lines.push(`Trusted sites: ${sync.trustedSites.count || 0} (${sync.trustedSites.source || 'unknown'})`);
+  lines.push('Global lists: blockedLinks.csv + blockedTLDs.csv + TrustedSites.csv');
   if (sync.suggestedProfileLabel) lines.push(`Detected browser account suggests ${sync.suggestedProfileLabel}.`);
   if (sync.lastError) lines.push(`Last error: ${sync.lastError}`);
   return lines.join('\n');
@@ -329,8 +469,12 @@ async function refreshGithubSyncStatus() {
   const files = response.githubSync.target?.files;
   if (files?.terms?.rawUrl && elements.termsRawLink) elements.termsRawLink.href = files.terms.rawUrl;
   if (files?.links?.rawUrl && elements.linksRawLink) elements.linksRawLink.href = files.links.rawUrl;
+  if (files?.tlds?.rawUrl && elements.tldsRawLink) elements.tldsRawLink.href = files.tlds.rawUrl;
   if (files?.trustedSites?.rawUrl && elements.trustedSitesRawLink) elements.trustedSitesRawLink.href = files.trustedSites.rawUrl;
   if (files?.terms?.path && elements.termsRawLink) elements.termsRawLink.textContent = files.terms.path.split('/').pop();
+  if (files?.links?.path && elements.linksRawLink) elements.linksRawLink.textContent = files.links.path.split('/').pop();
+  if (files?.tlds?.path && elements.tldsRawLink) elements.tldsRawLink.textContent = files.tlds.path.split('/').pop();
+  if (files?.trustedSites?.path && elements.trustedSitesRawLink) elements.trustedSitesRawLink.textContent = files.trustedSites.path.split('/').pop();
   renderGithubSyncDialogStatus(response.githubSync);
   return response.githubSync;
 }
@@ -407,7 +551,7 @@ async function runGithubAction(button, action) {
   try {
     if (action === 'upload') {
       await saveGithubSettings({ requireConsent: true });
-    } else if (!window.confirm(`Download ${state.githubSync?.activeProfileLabel || 'the selected profile'} terms plus the global links from GitHub and replace the current local lists?`)) {
+    } else if (!window.confirm(`Download ${state.githubSync?.activeProfileLabel || 'the selected profile'} terms plus the global links, TLDs and trusted sites from GitHub and replace the current local lists?`)) {
       return;
     }
 
@@ -416,12 +560,12 @@ async function runGithubAction(button, action) {
     });
     applyResponse(response);
     renderCounts();
-    if (state.view !== 'settings') renderList();
+    if (state.view !== 'settings') renderCurrentView();
     renderGithubSyncDialogStatus(response.githubSync);
     if (action === 'download' && response.usedBundledFallback) {
       toast('GitHub was unavailable. Packaged fallback lists were loaded.');
     } else {
-      toast(action === 'upload' ? 'Blocklists uploaded to GitHub.' : 'Blocklists downloaded from GitHub.');
+      toast(action === 'upload' ? 'Focus Master lists uploaded to GitHub.' : 'Focus Master lists downloaded from GitHub.');
     }
   } catch (error) {
     renderGithubSyncDialogStatus({ ...(state.githubSync || {}), lastError: error.message });
@@ -492,7 +636,8 @@ function bindAdminControls() {
     redirectLinksToggle: $('#redirectLinksToggle'), redirectLinksUrlInput: $('#redirectLinksUrlInput'),
     saveLinkRedirectButton: $('#saveLinkRedirectButton'), clearLinkRedirectButton: $('#clearLinkRedirectButton'),
     lockAdminButton: $('#lockAdminButton'), exportBackupButton: $('#exportBackupButton'), importBackupButton: $('#importBackupButton'),
-    exportTermsButton: $('#exportTermsButton'), exportLinksButton: $('#exportLinksButton'), backupInput: $('#backupInput')
+    exportTermsButton: $('#exportTermsButton'), exportLinksButton: $('#exportLinksButton'), exportTldsButton: $('#exportTldsButton'),
+    exportTrustedSitesButton: $('#exportTrustedSitesButton'), backupInput: $('#backupInput')
   });
 
   elements.enabledToggle.addEventListener('change', async () => {
@@ -555,6 +700,12 @@ function bindAdminControls() {
   elements.exportLinksButton.addEventListener('click', () => {
     downloadText('BraveFox-Blocker-Links.csv', serializeListCsv(state.links), 'text/csv;charset=utf-8');
   });
+  elements.exportTldsButton.addEventListener('click', () => {
+    downloadText('BraveFox-Blocker-TLDs.csv', serializeListForKind(state.tlds, 'tlds'), 'text/csv;charset=utf-8');
+  });
+  elements.exportTrustedSitesButton.addEventListener('click', () => {
+    downloadText('BraveFox-TrustedSites.csv', serializeListForKind(state.trustedSites, 'trustedSites'), 'text/csv;charset=utf-8');
+  });
   elements.importBackupButton.addEventListener('click', () => elements.backupInput.click());
   elements.backupInput.addEventListener('change', async () => {
     const file = elements.backupInput.files?.[0];
@@ -562,10 +713,13 @@ function bindAdminControls() {
     if (!file) return;
     try {
       const backup = parseFullBackup(await file.text());
-      if (!window.confirm(`Restore ${backup.terms.length} ordered terms, ${backup.links.length} ordered links and protected settings?`)) return;
+      const tldSummary = Array.isArray(backup.tlds) ? `${backup.tlds.length} TLDs` : 'keep current TLDs';
+      const trustedSummary = Array.isArray(backup.trustedSites) ? `${backup.trustedSites.length} trusted rules` : 'keep current trusted rules';
+      if (!window.confirm(`Restore ${backup.terms.length} ordered terms, ${backup.links.length} ordered links, ${tldSummary}, ${trustedSummary} and protected settings?`)) return;
       const response = await message({ type: MESSAGE.replaceAll, ...backup }, { redirectOnLock: false });
       applyResponse(response);
       renderCounts();
+      renderCurrentView();
       await renderAdminState();
       toast('Full ordered backup and protected settings restored.');
     } catch (error) {
@@ -585,57 +739,120 @@ function bindAdminControls() {
   bindSyncOpeners(elements.adminControls);
 }
 
+function bindListEditor({ kind, addInput, addButton, searchInput, importMode, importButton, exportButton, fileInput }) {
+  addButton.addEventListener('click', async () => {
+    const value = normalizerForKind(kind)(addInput.value);
+    if (!value) return toast(`Enter a valid ${kindLabel(kind)} first.`);
+    try {
+      const response = await message({ type: MESSAGE.addItem, kind, value });
+      applyResponse(response);
+      addInput.value = '';
+      renderCounts();
+      renderCurrentView();
+      toast('Entry appended; GitHub sync queued.');
+    } catch (error) { if (!lockingOut) toast(error.message); }
+  });
+  addInput.addEventListener('keydown', event => { if (event.key === 'Enter') addButton.click(); });
+  searchInput.addEventListener('input', renderCurrentView);
+  importButton.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = '';
+    if (!file) return;
+    try {
+      const values = parseListText(await file.text(), kind);
+      if (!values.length) throw new Error('No usable entries were found in the file.');
+      if (importMode.value === 'replace' && !confirm(`Replace the entire ${kindLabel(kind, 2)} list with ${values.length} ordered entries?`)) return;
+      const response = await message({ type: MESSAGE.importList, kind, mode: importMode.value, values });
+      applyResponse(response);
+      renderCounts();
+      renderCurrentView();
+      toast(`${values.length} ordered entries imported; GitHub sync queued.`);
+    } catch (error) { if (!lockingOut) toast(error.message); }
+  });
+  exportButton.addEventListener('click', () => {
+    downloadText(exportNameForKind(kind), serializeListForKind(valuesForKind(kind), kind), 'text/csv;charset=utf-8');
+  });
+}
+
 function bind() {
   Object.assign(elements, {
-    app: $('#app'), termCount: $('#termCount'), linkCount: $('#linkCount'),
-    viewTitle: $('#viewTitle'), viewSubtitle: $('#viewSubtitle'), listView: $('#listView'), settingsView: $('#settingsView'),
+    app: $('#app'), termCount: $('#termCount'), linkTldCount: $('#linkTldCount'), trustedSiteCount: $('#trustedSiteCount'),
+    linkSectionCount: $('#linkSectionCount'), tldSectionCount: $('#tldSectionCount'),
+    viewTitle: $('#viewTitle'), viewSubtitle: $('#viewSubtitle'), singleListView: $('#singleListView'), linksTldsView: $('#linksTldsView'), settingsView: $('#settingsView'),
+    trustedTypeBar: $('#trustedTypeBar'), trustedTypeFilter: $('#trustedTypeFilter'),
     addInput: $('#addInput'), addButton: $('#addButton'), searchInput: $('#searchInput'), importMode: $('#importMode'),
-    importButton: $('#importButton'), exportButton: $('#exportButton'), fileInput: $('#fileInput'), items: $('#items'), emptyState: $('#emptyState'),
+    importButton: $('#importButton'), exportButton: $('#exportButton'), fileInput: $('#fileInput'), items: $('#items'), emptyState: $('#emptyState'), singleListOrderNote: $('#singleListOrderNote'),
+    addLinkInput: $('#addLinkInput'), addLinkButton: $('#addLinkButton'), linkSearchInput: $('#linkSearchInput'), linkImportMode: $('#linkImportMode'),
+    linkImportButton: $('#linkImportButton'), linkExportButton: $('#linkExportButton'), linkFileInput: $('#linkFileInput'), linkItems: $('#linkItems'), linkEmptyState: $('#linkEmptyState'),
+    addTldInput: $('#addTldInput'), addTldButton: $('#addTldButton'), tldSearchInput: $('#tldSearchInput'), tldImportMode: $('#tldImportMode'),
+    tldImportButton: $('#tldImportButton'), tldExportButton: $('#tldExportButton'), tldFileInput: $('#tldFileInput'), tldItems: $('#tldItems'), tldEmptyState: $('#tldEmptyState'),
     adminLocked: $('#adminLocked'), adminUnlockForm: $('#adminUnlockForm'), adminPasswordInput: $('#adminPasswordInput'),
     adminUnlockButton: $('#adminUnlockButton'), adminError: $('#adminError'), adminControlsMount: $('#adminControlsMount'),
     lockButton: $('#lockButton'), toast: $('#toast'), syncLabel: $('#syncLabel'), syncDialog: $('#syncDialog'),
     closeSyncDialog: $('#closeSyncDialog'), githubTokenInput: $('#githubTokenInput'), tokenRecoveryToggle: $('#tokenRecoveryToggle'), automaticSyncToggle: $('#automaticSyncToggle'),
     clearGithubToken: $('#clearGithubToken'), githubSyncStatus: $('#githubSyncStatus'), termsRawLink: $('#termsRawLink'), linksRawLink: $('#linksRawLink'),
-    trustedSitesRawLink: $('#trustedSitesRawLink'), syncProfileSelect: $('#syncProfileSelect'), syncProfileHelp: $('#syncProfileHelp'), detectedProfileStatus: $('#detectedProfileStatus'),
+    tldsRawLink: $('#tldsRawLink'), trustedSitesRawLink: $('#trustedSitesRawLink'), syncProfileSelect: $('#syncProfileSelect'), syncProfileHelp: $('#syncProfileHelp'), detectedProfileStatus: $('#detectedProfileStatus'),
     saveGithubSyncSettings: $('#saveGithubSyncSettings'), downloadFromGithub: $('#downloadFromGithub'), uploadToGithub: $('#uploadToGithub')
   });
 
   document.querySelectorAll('.nav-button').forEach(button => button.addEventListener('click', () => selectView(button.dataset.view)));
 
+  // Terms and Trusted Sites share the simple single-list editor. The active
+  // view decides which normalizer and GitHub-backed list receives the change.
   elements.addButton.addEventListener('click', async () => {
-    const raw = elements.addInput.value;
-    const value = state.view === 'links' ? normalizeLinkForStorage(raw) : normalizeTerm(raw);
-    if (!value) return toast('Enter a valid value first.');
+    const kind = currentSingleKind();
+    const value = normalizerForKind(kind)(elements.addInput.value);
+    if (!value) return toast(`Enter a valid ${kindLabel(kind)} first.`);
+    const trustedType = kind === 'trustedSites' ? parseTrustedSiteEntry(value)?.type : '';
     try {
-      const response = await message({ type: MESSAGE.addItem, kind: state.view, value });
+      const response = await message({ type: MESSAGE.addItem, kind, value });
       applyResponse(response);
+      if (trustedType === 'domain' || trustedType === 'path') state.trustedSiteFilter = trustedType;
       elements.addInput.value = '';
       renderCounts();
-      renderList();
+      renderCurrentView();
       toast('Entry appended; GitHub sync queued.');
     } catch (error) { if (!lockingOut) toast(error.message); }
   });
   elements.addInput.addEventListener('keydown', event => { if (event.key === 'Enter') elements.addButton.click(); });
-  elements.searchInput.addEventListener('input', renderList);
+  elements.searchInput.addEventListener('input', renderCurrentView);
+  elements.trustedTypeFilter.addEventListener('change', () => {
+    state.trustedSiteFilter = elements.trustedTypeFilter.value === 'path' ? 'path' : 'domain';
+    updateTrustedTypeFilterUi();
+    renderCurrentView();
+  });
   elements.importButton.addEventListener('click', () => elements.fileInput.click());
   elements.fileInput.addEventListener('change', async () => {
     const file = elements.fileInput.files?.[0];
     elements.fileInput.value = '';
     if (!file) return;
+    const kind = currentSingleKind();
     try {
-      const values = parseListText(await file.text(), state.view);
+      const values = parseListText(await file.text(), kind);
       if (!values.length) throw new Error('No usable entries were found in the file.');
-      if (elements.importMode.value === 'replace' && !confirm(`Replace the entire ${state.view} list with ${values.length} ordered entries?`)) return;
-      const response = await message({ type: MESSAGE.importList, kind: state.view, mode: elements.importMode.value, values });
+      if (elements.importMode.value === 'replace' && !confirm(`Replace the entire ${kindLabel(kind, 2)} list with ${values.length} ordered entries?`)) return;
+      const response = await message({ type: MESSAGE.importList, kind, mode: elements.importMode.value, values });
       applyResponse(response);
       renderCounts();
-      renderList();
+      renderCurrentView();
       toast(`${values.length} ordered entries imported; GitHub sync queued.`);
     } catch (error) { if (!lockingOut) toast(error.message); }
   });
   elements.exportButton.addEventListener('click', () => {
-    const name = state.view === 'terms' ? 'BraveFox-Blocker-Terms.csv' : 'BraveFox-Blocker-Links.csv';
-    downloadText(name, serializeListCsv(currentValues()), 'text/csv;charset=utf-8');
+    const kind = currentSingleKind();
+    downloadText(exportNameForKind(kind), serializeListForKind(valuesForKind(kind), kind), 'text/csv;charset=utf-8');
+  });
+
+  bindListEditor({
+    kind: 'links', addInput: elements.addLinkInput, addButton: elements.addLinkButton,
+    searchInput: elements.linkSearchInput, importMode: elements.linkImportMode,
+    importButton: elements.linkImportButton, exportButton: elements.linkExportButton, fileInput: elements.linkFileInput
+  });
+  bindListEditor({
+    kind: 'tlds', addInput: elements.addTldInput, addButton: elements.addTldButton,
+    searchInput: elements.tldSearchInput, importMode: elements.tldImportMode,
+    importButton: elements.tldImportButton, exportButton: elements.tldExportButton, fileInput: elements.tldFileInput
   });
 
   elements.adminUnlockForm.addEventListener('submit', async event => {
@@ -658,7 +875,6 @@ function bind() {
       elements.adminPasswordInput.focus();
     }
   });
-
 
   bindSyncOpeners(document);
   bindGithubSyncDialog();
@@ -711,7 +927,7 @@ async function start() {
   bind();
   applyResponse(response);
   renderCounts();
-  renderList();
+  renderCurrentView();
   if (state.adminUnlocked) await renderAdminState();
   else setAdminLockedUi();
   startAccessWatcher();

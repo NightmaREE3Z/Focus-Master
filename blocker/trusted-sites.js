@@ -1,32 +1,31 @@
 const browserApi = globalThis.browser ?? globalThis.chrome;
 const LOG_PREFIX = '[BraveFox Focus Master Trusted Sites]';
-const REMOTE_URL = 'https://raw.githubusercontent.com/NightmaREE3Z/Focus-Master/refs/heads/BraveFox/blocker/lists/TrustedSites.csv';
-const BUNDLED_PATH = 'blocker/lists/TrustedSites.csv';
-const CACHE_KEY = 'bfb:trusted-sites-cache:v1';
-const STATUS_KEY = 'bfb:trusted-sites-status:v1';
-const ALARM_NAME = 'bfb-trusted-sites-refresh';
-const REFRESH_MINUTES = 15;
-const MIN_VALID_ENTRIES = 20;
 
 const listeners = new Set();
-let initializedPromise = null;
 let domains = new Set();
 let pathRules = [];
+let entries = [];
 let status = {
-  source: 'not-loaded',
+  source: 'dataset',
   count: 0,
   lastUpdated: 0,
   lastError: ''
 };
 
 function normalizeHost(value) {
-  return String(value || '').trim().toLowerCase().replace(/^\.+|\.+$/g, '').replace(/^www\./, '');
+  return String(value || '')
+    .trim()
+    .toLocaleLowerCase('en-US')
+    .replace(/^https?:\/\//i, '')
+    .replace(/^\.+|\.+$/g, '')
+    .replace(/^www\./, '');
 }
 
 function normalizePathPrefix(value) {
   let path = String(value || '/').trim();
   if (!path.startsWith('/')) path = `/${path}`;
-  path = path.replace(/\/{2,}/g, '/').replace(/\/$/, '');
+  path = path.replace(/\/{2,}/g, '/');
+  if (path.length > 1) path = path.replace(/\/$/, '');
   return path || '/';
 }
 
@@ -42,165 +41,179 @@ function parseCsvLine(line) {
   for (let index = 0; index < line.length; index += 1) {
     const char = line[index];
     if (char === '"') {
-      if (quoted && line[index + 1] === '"') { current += '"'; index += 1; }
-      else quoted = !quoted;
+      if (quoted && line[index + 1] === '"') {
+        current += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
     } else if (char === ',' && !quoted) {
-      fields.push(current.trim()); current = '';
-    } else current += char;
+      fields.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
   }
   fields.push(current.trim());
   return fields;
 }
 
+function csvField(value) {
+  const text = String(value ?? '');
+  if (!/[",\r\n]/.test(text)) return text;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function descriptorFromFields(typeValue, hostValue, pathValue = '') {
+  const type = String(typeValue || '').trim().toLocaleLowerCase('en-US');
+  const host = normalizeHost(hostValue);
+  if (!host || (!host.includes('.') && host !== 'localhost')) return null;
+
+  if (type === 'domain') {
+    return { type: 'domain', host, pathPrefix: '', entry: `domain,${host}` };
+  }
+  if (type === 'path') {
+    const pathPrefix = normalizePathPrefix(pathValue);
+    if (pathPrefix === '/') return { type: 'domain', host, pathPrefix: '', entry: `domain,${host}` };
+    return { type: 'path', host, pathPrefix, entry: `path,${host},${pathPrefix}` };
+  }
+  return null;
+}
+
+export function parseTrustedSiteEntry(value) {
+  if (value && typeof value === 'object') {
+    return descriptorFromFields(value.type, value.host, value.pathPrefix || value.path || '');
+  }
+
+  const raw = String(value ?? '').replace(/^\uFEFF/, '').trim();
+  if (!raw || raw.startsWith('#')) return null;
+
+  const fields = parseCsvLine(raw);
+  const first = String(fields[0] || '').toLocaleLowerCase('en-US');
+  if (first === 'type' && String(fields[1] || '').toLocaleLowerCase('en-US') === 'host') return null;
+  if (first === 'domain') return descriptorFromFields(first, fields[1], fields[2]);
+  if (first === 'path') {
+    // Backward compatibility: older hand-edited TrustedSites.csv files could
+    // contain path rows as `path,example.com/some/path` with the host and
+    // path accidentally combined into the second CSV field. Recover that
+    // shape on import so the next export/GitHub upload self-heals it.
+    const hostField = String(fields[1] || '').trim();
+    const pathField = String(fields[2] || '').trim();
+    if (!pathField && /[\/?#]/.test(hostField)) {
+      try {
+        const parsed = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(hostField) ? hostField : `https://${hostField}`);
+        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+          return descriptorFromFields('path', parsed.hostname, parsed.pathname || '/');
+        }
+      } catch {
+        // Fall through to the normal CSV-field parser below.
+      }
+    }
+    return descriptorFromFields(first, fields[1], fields[2]);
+  }
+
+  // Friendly input: a plain domain, domain/path, or full URL.
+  try {
+    const parsed = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    const host = normalizeHost(parsed.hostname);
+    const pathPrefix = normalizePathPrefix(parsed.pathname || '/');
+    return descriptorFromFields(pathPrefix === '/' ? 'domain' : 'path', host, pathPrefix);
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeTrustedSiteEntry(value) {
+  return parseTrustedSiteEntry(value)?.entry || '';
+}
+
 export function parseTrustedSitesCsv(text) {
+  const nextEntries = [];
+  const seen = new Set();
   const nextDomains = new Set();
   const nextPaths = [];
-  const pathKeys = new Set();
+
   for (const rawLine of String(text || '').replace(/^\uFEFF/, '').split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-    const fields = parseCsvLine(line);
-    const type = String(fields[0] || '').toLowerCase();
-    if (type === 'type' && String(fields[1] || '').toLowerCase() === 'host') continue;
-    if (type === 'domain') {
-      const host = normalizeHost(fields[1]);
-      if (host && host.includes('.')) nextDomains.add(host);
-      continue;
-    }
-    if (type === 'path') {
-      const host = normalizeHost(fields[1]);
-      const pathPrefix = normalizePathPrefix(fields[2]);
-      const keyPath = usesCaseInsensitivePaths(host) ? pathPrefix.toLowerCase() : pathPrefix;
-      const key = `${host}\n${keyPath}`;
-      if (host && host.includes('.') && !pathKeys.has(key)) {
-        pathKeys.add(key);
-        nextPaths.push({ host, pathPrefix });
-      }
-      continue;
-    }
-    // Friendly single-column fallback: a plain domain per line is accepted.
-    if (fields.length === 1) {
-      const host = normalizeHost(fields[0]);
-      if (host && host.includes('.')) nextDomains.add(host);
-    }
+    const descriptor = parseTrustedSiteEntry(rawLine);
+    if (!descriptor || seen.has(descriptor.entry)) continue;
+    seen.add(descriptor.entry);
+    nextEntries.push(descriptor.entry);
+    if (descriptor.type === 'domain') nextDomains.add(descriptor.host);
+    else nextPaths.push({ host: descriptor.host, pathPrefix: descriptor.pathPrefix });
   }
-  const count = nextDomains.size + nextPaths.length;
-  if (count < MIN_VALID_ENTRIES) throw new Error(`TrustedSites.csv contains only ${count} valid entries.`);
-  return { domains: [...nextDomains], pathRules: nextPaths };
+
+  return { entries: nextEntries, domains: [...nextDomains], pathRules: nextPaths };
+}
+
+export function serializeTrustedSitesCsv(values) {
+  const domains = [];
+  const paths = [];
+  const seen = new Set();
+
+  for (const value of Array.isArray(values) ? values : []) {
+    const descriptor = parseTrustedSiteEntry(value);
+    if (!descriptor || seen.has(descriptor.entry)) continue;
+    seen.add(descriptor.entry);
+    if (descriptor.type === 'domain') domains.push(descriptor);
+    else paths.push(descriptor);
+  }
+
+  // Keep the on-disk/GitHub file human-readable as well as machine-readable.
+  // The parser already ignores blank lines and # comments, so these section
+  // headings round-trip cleanly without becoming trusted-site rules.
+  const rows = ['type,host,path', '', '# DOMAINS'];
+  for (const descriptor of domains) {
+    rows.push(`domain,${csvField(descriptor.host)},`);
+  }
+  rows.push('', '# PATHS');
+  for (const descriptor of paths) {
+    rows.push(`path,${csvField(descriptor.host)},${csvField(descriptor.pathPrefix)}`);
+  }
+  return `${rows.join('\r\n')}\r\n`;
 }
 
 function pathPrefixMatches(pathname, prefix, { caseInsensitive = false } = {}) {
   let path = String(pathname || '/').replace(/\/{2,}/g, '/');
   let normalized = normalizePathPrefix(prefix);
   if (caseInsensitive) {
-    path = path.toLowerCase();
-    normalized = normalized.toLowerCase();
+    path = path.toLocaleLowerCase('en-US');
+    normalized = normalized.toLocaleLowerCase('en-US');
   }
   return path === normalized || path.startsWith(`${normalized}/`);
 }
 
-function applyTrustedSites(data, nextStatus) {
-  domains = new Set((data?.domains || []).map(normalizeHost).filter(Boolean));
-  pathRules = (data?.pathRules || []).map(rule => ({
-    host: normalizeHost(rule.host),
-    pathPrefix: normalizePathPrefix(rule.pathPrefix)
-  })).filter(rule => rule.host && rule.pathPrefix);
+export function applyTrustedSiteEntries(values, nextStatus = {}) {
+  const parsed = parseTrustedSitesCsv((Array.isArray(values) ? values : []).join('\n'));
+  entries = parsed.entries;
+  domains = new Set(parsed.domains);
+  pathRules = parsed.pathRules;
   status = {
-    source: String(nextStatus?.source || 'unknown'),
-    count: domains.size + pathRules.length,
-    lastUpdated: Number(nextStatus?.lastUpdated) || Date.now(),
-    lastError: String(nextStatus?.lastError || '')
+    source: String(nextStatus.source || 'dataset'),
+    count: entries.length,
+    lastUpdated: Number(nextStatus.lastUpdated) || Date.now(),
+    lastError: String(nextStatus.lastError || '')
   };
+
   for (const listener of listeners) {
-    try { listener(getTrustedSiteDescriptors(), getTrustedSitesStatus()); } catch (error) { console.warn(LOG_PREFIX, error); }
+    try {
+      listener(getTrustedSiteDescriptors(), getTrustedSitesStatus());
+    } catch (error) {
+      console.warn(LOG_PREFIX, error);
+    }
   }
+  return getTrustedSitesStatus();
 }
 
-async function fetchText(url) {
-  const separator = url.includes('?') ? '&' : '?';
-  const response = await fetch(`${url}${separator}bravefox_refresh=${Date.now()}`, {
-    cache: 'no-store', credentials: 'omit', headers: { Accept: 'text/plain' }
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.text();
+export async function initializeTrustedSites(values = null) {
+  if (Array.isArray(values)) applyTrustedSiteEntries(values, { source: 'dataset' });
+  return getTrustedSitesStatus();
 }
 
-async function readCache() {
-  try {
-    const result = await browserApi.storage.local.get(CACHE_KEY);
-    const record = result[CACHE_KEY];
-    if (!record?.csv) return null;
-    return { data: parseTrustedSitesCsv(record.csv), updatedAt: Number(record.updatedAt) || 0 };
-  } catch { return null; }
-}
-
-async function readBundled() {
-  const response = await fetch(browserApi.runtime.getURL(BUNDLED_PATH), { cache: 'no-store' });
-  if (!response.ok) throw new Error(`Bundled TrustedSites.csv failed (HTTP ${response.status}).`);
-  const csv = await response.text();
-  return { csv, data: parseTrustedSitesCsv(csv) };
-}
-
-async function writeStatus() {
-  try { await browserApi.storage.local.set({ [STATUS_KEY]: status }); } catch {}
-}
-
-export async function refreshTrustedSites({ reason = 'automatic' } = {}) {
-  let remoteError = null;
-  try {
-    const csv = await fetchText(REMOTE_URL);
-    const data = parseTrustedSitesCsv(csv);
-    const now = Date.now();
-    await browserApi.storage.local.set({ [CACHE_KEY]: { csv, updatedAt: now } });
-    applyTrustedSites(data, { source: 'github', lastUpdated: now, lastError: '' });
-    await writeStatus();
-    return getTrustedSitesStatus();
-  } catch (error) {
-    remoteError = error;
-  }
-
-  const cached = await readCache();
-  if (cached) {
-    applyTrustedSites(cached.data, {
-      source: 'last-known-good-cache',
-      lastUpdated: cached.updatedAt,
-      lastError: `GitHub refresh failed during ${reason}: ${String(remoteError?.message || remoteError)}`
-    });
-    await writeStatus();
-    return getTrustedSitesStatus();
-  }
-
-  try {
-    const bundled = await readBundled();
-    applyTrustedSites(bundled.data, {
-      source: 'bundled-fallback',
-      lastUpdated: Date.now(),
-      lastError: `GitHub refresh failed during ${reason}: ${String(remoteError?.message || remoteError)}`
-    });
-    await writeStatus();
-    return getTrustedSitesStatus();
-  } catch (fallbackError) {
-    applyTrustedSites(
-      { domains: [], pathRules: [] },
-      {
-        source: 'unavailable',
-        lastUpdated: Date.now(),
-        lastError: `Remote, cached and bundled trusted-site loading failed: ${String(fallbackError?.message || fallbackError)}`
-      }
-    );
-    await writeStatus();
-    return getTrustedSitesStatus();
-  }
-}
-
-export async function initializeTrustedSites() {
-  if (initializedPromise) return initializedPromise;
-  initializedPromise = (async () => {
-    const result = await refreshTrustedSites({ reason: 'startup' });
-    browserApi.alarms?.create?.(ALARM_NAME, { periodInMinutes: REFRESH_MINUTES });
-    return result;
-  })();
-  return initializedPromise;
+// Kept as a compatibility hook for older callers. GitHub refreshes now flow
+// through the unified four-list dataset instead of this module fetching on its own.
+export async function refreshTrustedSites() {
+  return getTrustedSitesStatus();
 }
 
 export function isTrustedHostname(value) {
@@ -223,14 +236,22 @@ export function isTrustedUrl(value) {
       host === rule.host &&
       pathPrefixMatches(parsed.pathname, rule.pathPrefix, { caseInsensitive: usesCaseInsensitivePaths(host) })
     );
-  } catch { return false; }
+  } catch {
+    return false;
+  }
+}
+
+export function getTrustedSiteEntries() {
+  return [...entries];
 }
 
 export function getTrustedSiteDescriptors() {
   return { domains: [...domains], pathRules: pathRules.map(rule => ({ ...rule })) };
 }
 
-export function getTrustedSitesStatus() { return { ...status, remoteUrl: REMOTE_URL }; }
+export function getTrustedSitesStatus() {
+  return { ...status };
+}
 
 export function onTrustedSitesChanged(listener) {
   if (typeof listener !== 'function') return () => {};
@@ -238,10 +259,6 @@ export function onTrustedSitesChanged(listener) {
   return () => listeners.delete(listener);
 }
 
-browserApi.alarms?.onAlarm?.addListener?.(alarm => {
-  if (alarm?.name !== ALARM_NAME) return;
-  void refreshTrustedSites({ reason: 'scheduled refresh' }).catch(error => console.warn(LOG_PREFIX, error));
-});
-
-browserApi.runtime?.onStartup?.addListener?.(() => { void initializeTrustedSites(); });
-browserApi.runtime?.onInstalled?.addListener?.(() => { void initializeTrustedSites(); });
+// Avoid an unused-global warning in Firefox builds where `browserApi` is only
+// needed for compatibility with older bundled variants.
+void browserApi;

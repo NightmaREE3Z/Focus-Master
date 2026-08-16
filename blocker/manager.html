@@ -20,8 +20,9 @@
       <div><strong>BraveFox</strong><span>Focus Master</span></div>
     </div>
     <nav aria-label="Focus Master sections">
-      <button class="nav-button active" data-view="terms">Terms <span id="termCount">0</span></button>
-      <button class="nav-button" data-view="links">Links <span id="linkCount">0</span></button>
+      <button class="nav-button active" data-view="terms">Blocked Terms <span id="termCount">0</span></button>
+      <button class="nav-button" data-view="links">Links / TLDs <span id="linkTldCount">0</span></button>
+      <button class="nav-button" data-view="trustedSites">Trusted Sites <span id="trustedSiteCount">0</span></button>
       <button class="nav-button" data-view="settings">Settings</button>
     </nav>
     <div class="sidebar-footer">
@@ -39,14 +40,23 @@
       </div>
     </header>
 
-    <section id="listView" class="panel">
+    <section id="singleListView" class="panel">
       <div class="add-row">
         <input id="addInput" type="text" autocomplete="off" placeholder="Add a term or phrase">
         <button id="addButton" class="primary-button">Add</button>
       </div>
 
+      <div id="trustedTypeBar" class="trusted-type-bar" hidden>
+        <span class="trusted-type-label">Show</span>
+        <select id="trustedTypeFilter" class="trusted-type-filter domain" aria-label="Trusted site rule type">
+          <option value="domain">DOMAIN</option>
+          <option value="path">PATH</option>
+        </select>
+        <span class="trusted-type-help">Domains and paths stay in one synced CSV; this only changes what is shown here.</span>
+      </div>
+
       <div class="toolbar">
-        <input id="searchInput" type="search" placeholder="Search the blocklist">
+        <input id="searchInput" type="search" placeholder="Search the list">
         <span class="toolbar-spacer"></span>
         <select id="importMode" aria-label="Import mode">
           <option value="merge">Merge import</option>
@@ -57,9 +67,67 @@
         <input id="fileInput" type="file" accept=".csv,.txt,text/csv,text/plain" hidden>
       </div>
 
-      <p class="order-note">Order follows the CSV. Merge imports append new unique entries; manual additions go to the end.</p>
+      <p id="singleListOrderNote" class="order-note">Order follows the CSV. Merge imports append new unique entries; manual additions go to the end.</p>
       <div id="emptyState" class="empty-state" hidden>No entries yet.</div>
       <div id="items" class="items" role="list"></div>
+    </section>
+
+    <section id="linksTldsView" class="split-list-shell" hidden>
+      <article class="panel list-subpanel">
+        <header class="subpanel-heading">
+          <div>
+            <h2>Blocked links</h2>
+            <p>Domains, URL paths and query-specific rules.</p>
+          </div>
+          <span id="linkSectionCount" class="count-pill">0</span>
+        </header>
+        <div class="add-row">
+          <input id="addLinkInput" type="text" autocomplete="off" placeholder="Add a domain or URL">
+          <button id="addLinkButton" class="primary-button">Add link</button>
+        </div>
+        <div class="toolbar">
+          <input id="linkSearchInput" type="search" placeholder="Search blocked links">
+          <span class="toolbar-spacer"></span>
+          <select id="linkImportMode" aria-label="Blocked links import mode">
+            <option value="merge">Merge import</option>
+            <option value="replace">Replace links</option>
+          </select>
+          <button id="linkImportButton" class="secondary-button">Import CSV</button>
+          <button id="linkExportButton" class="secondary-button">Export CSV</button>
+          <input id="linkFileInput" type="file" accept=".csv,.txt,text/csv,text/plain" hidden>
+        </div>
+        <p class="order-note">Link rules are matched structurally against host, path and any query fields stored in the rule.</p>
+        <div id="linkEmptyState" class="empty-state" hidden>No blocked links yet.</div>
+        <div id="linkItems" class="items" role="list"></div>
+      </article>
+
+      <article class="panel list-subpanel">
+        <header class="subpanel-heading">
+          <div>
+            <h2>Blocked TLDs</h2>
+            <p>Hostname-suffix rules such as <code>.ai</code>, <code>.online</code> or <code>.co.uk</code>.</p>
+          </div>
+          <span id="tldSectionCount" class="count-pill">0</span>
+        </header>
+        <div class="add-row">
+          <input id="addTldInput" type="text" autocomplete="off" placeholder="Add a TLD, for example .ai">
+          <button id="addTldButton" class="primary-button">Add TLD</button>
+        </div>
+        <div class="toolbar">
+          <input id="tldSearchInput" type="search" placeholder="Search blocked TLDs">
+          <span class="toolbar-spacer"></span>
+          <select id="tldImportMode" aria-label="Blocked TLDs import mode">
+            <option value="merge">Merge import</option>
+            <option value="replace">Replace TLDs</option>
+          </select>
+          <button id="tldImportButton" class="secondary-button">Import CSV</button>
+          <button id="tldExportButton" class="secondary-button">Export CSV</button>
+          <input id="tldFileInput" type="file" accept=".csv,.txt,text/csv,text/plain" hidden>
+        </div>
+        <p class="order-note">TLDs are checked only against the hostname suffix. URL paths, titles and query parameters cannot satisfy a TLD rule.</p>
+        <div id="tldEmptyState" class="empty-state" hidden>No blocked TLDs yet.</div>
+        <div id="tldItems" class="items" role="list"></div>
+      </article>
     </section>
 
     <section id="settingsView" class="settings-shell" hidden>
@@ -90,7 +158,7 @@
       <header class="sync-dialog-header">
         <div>
           <h2 id="syncDialogTitle">GitHub Blocklist Sync</h2>
-          <p>Synchronize blocked terms and links between Chrome, Firefox PC and Firefox Android.</p>
+          <p>Synchronize blocked terms, links, TLDs and trusted sites between Chrome, Firefox PC and Firefox Android.</p>
         </div>
         <button id="closeSyncDialog" class="dialog-close" type="button" aria-label="Close sync dialog">×</button>
       </header>
@@ -101,6 +169,7 @@
         <div class="sync-link-list">
           <a id="termsRawLink" target="_blank" rel="noreferrer">blockedTerms.csv</a>
           <a id="linksRawLink" target="_blank" rel="noreferrer">blockedLinks.csv</a>
+          <a id="tldsRawLink" target="_blank" rel="noreferrer">blockedTLDs.csv</a>
           <a id="trustedSitesRawLink" target="_blank" rel="noreferrer">TrustedSites.csv</a>
         </div>
       </section>
@@ -112,7 +181,7 @@
           <option value="haukkis">Haukkis — blockedTerms.csv</option>
           <option value="tapsa">Tapsa — blockedTermsDad.csv</option>
         </select>
-        <p id="syncProfileHelp" class="field-help">Blocked links and TrustedSites.csv are global. Changing profile does not replace the current terms until you manually Download or Upload.</p>
+        <p id="syncProfileHelp" class="field-help">Blocked links, TLDs and TrustedSites.csv are global. Changing profile does not replace the current terms until you manually Download or Upload.</p>
         <p id="detectedProfileStatus" class="field-help" aria-live="polite"></p>
       </section>
 
@@ -123,7 +192,7 @@
         <label class="checkbox-line sync-auto-line"><input id="tokenRecoveryToggle" type="checkbox" checked> Keep a clean-install recovery copy in Google Drive</label>
         <p class="field-help">On Save, an approved Chrome profile account can authorize this extension to keep its own hidden recovery record in Google Drive app data. After a clean reinstall, the same account can restore it automatically. Other accounts and unsigned profiles never receive it.</p>
         <label class="checkbox-line sync-auto-line"><input id="automaticSyncToggle" type="checkbox" checked> Automatic Sync</label>
-        <p class="field-help">Checks every 15 minutes and shortly after changes. Terms use the selected Sync Profile; links are global. TrustedSites.csv is centrally managed and download-only.</p>
+        <p class="field-help">Checks every 15 minutes and shortly after changes. Terms use the selected Sync Profile; links, TLDs and TrustedSites.csv are global and synchronize both ways.</p>
         <button id="clearGithubToken" class="secondary-button danger-lite" type="button">Forget saved token</button>
       </section>
 
@@ -151,7 +220,7 @@
     <div class="admin-master-row">
       <div>
         <h2>Enable Focus Master</h2>
-        <p>Turning it off stops both term and link enforcement. Your lists and choices stay saved.</p>
+        <p>Turning it off stops all Focus Master enforcement. Your lists and choices stay saved.</p>
       </div>
       <label class="master-toggle"><input id="enabledToggle" type="checkbox"><span>Focus Master enabled</span></label>
     </div>
@@ -161,7 +230,7 @@
     <h2>Blocking</h2>
     <p>These controls are unavailable while the master blocker is disabled.</p>
     <label class="checkbox-line"><input id="blockTermsToggle" type="checkbox"> Block search terms and phrases</label>
-    <label class="checkbox-line"><input id="blockLinksToggle" type="checkbox"> Block websites and URL paths</label>
+    <label class="checkbox-line"><input id="blockLinksToggle" type="checkbox"> Block websites, URL paths and TLDs</label>
   </section>
 
   <section id="redirectSettings" class="setting-card protected-dependent-group">
@@ -178,7 +247,7 @@
     </div>
 
     <div id="linkRedirectEditor" class="redirect-editor">
-      <label class="checkbox-line"><input id="redirectLinksToggle" type="checkbox"> Redirect blocked website and path matches</label>
+      <label class="checkbox-line"><input id="redirectLinksToggle" type="checkbox"> Redirect blocked website, path and TLD matches</label>
       <div class="redirect-row">
         <input id="redirectLinksUrlInput" type="url" inputmode="url" autocomplete="url" placeholder="Link redirect URL (for example, example.com)">
         <button id="saveLinkRedirectButton" class="secondary-button" type="button">Save</button>
@@ -203,12 +272,14 @@
 
   <section class="setting-card">
     <h2>Backup</h2>
-    <p>CSV exports preserve list order. JSON stores both ordered lists and all protected settings.</p>
+    <p>CSV exports preserve list order. JSON stores all four ordered lists and all protected settings.</p>
     <div class="button-row wrap-buttons">
       <button id="importBackupButton" class="secondary-button" type="button">Restore full JSON</button>
       <button id="exportBackupButton" class="secondary-button" type="button">Export full JSON</button>
       <button id="exportTermsButton" class="secondary-button" type="button">Export Terms</button>
       <button id="exportLinksButton" class="secondary-button" type="button">Export Links</button>
+      <button id="exportTldsButton" class="secondary-button" type="button">Export TLDs</button>
+      <button id="exportTrustedSitesButton" class="secondary-button" type="button">Export Trusted Sites</button>
       <input id="backupInput" type="file" accept=".json,application/json" hidden>
     </div>
   </section>

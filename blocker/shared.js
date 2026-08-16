@@ -66,6 +66,20 @@ export function normalizeLinkForStorage(value) {
   }
 }
 
+export function normalizeTldForStorage(value) {
+  let raw = normalizeWhitespace(value).replace(/^\uFEFF/, '').toLocaleLowerCase('en-US');
+  if (!raw) return '';
+
+  // Accept friendly forms such as .ai, ai, *.ai and multi-label suffixes such
+  // as .co.uk. TLD rules are suffix rules only; paths, queries and ports are
+  // deliberately rejected rather than guessed.
+  raw = raw.replace(/^\*\./, '.').replace(/^\.+/, '');
+  if (!raw || /[\s\/?#:@]/.test(raw) || raw.includes('..')) return '';
+  const labels = raw.split('.');
+  if (labels.some(label => !label)) return '';
+  return `.${raw}`;
+}
+
 export function normalizeRedirectUrl(value) {
   const raw = normalizeWhitespace(value).replace(/^\uFEFF/, '');
   if (!raw) return '';

@@ -34,13 +34,14 @@ import {
   synchronizeNow,
   updateSettings
 } from './storage.js';
-import { initializeTrustedSites } from './trusted-sites.js';
+import { normalizeTrustedSiteEntry } from './trusted-sites.js';
 import {
   isCompletelyExcludedUrl,
   isIncognitoSender,
   isSupportedWebUrl,
   normalizeLinkForStorage,
   normalizeTerm,
+  normalizeTldForStorage,
   uniqueInOrder
 } from './shared.js';
 
@@ -155,12 +156,16 @@ async function sendNativeBlockLog(reason, sourceUrl, redirectTarget = '') {
     ? 'Focus Master fetched-hosts matcher'
     : reasonType === 'link'
       ? 'Focus Master blocked-link matcher'
-      : 'Focus Master blocked-term matcher';
+      : reasonType === 'tld'
+        ? 'Focus Master blocked-TLD matcher'
+        : 'Focus Master blocked-term matcher';
   const context = reasonType === 'host'
     ? 'fetched-host'
     : reasonType === 'link'
       ? 'blocked-link'
-      : 'blocked-term';
+      : reasonType === 'tld'
+        ? 'blocked-tld'
+        : 'blocked-term';
   const payload = {
     type: 'BRAVEFOX_REDIRECT_LOG',
     source: NATIVE_LOG_SOURCE,
@@ -229,7 +234,7 @@ async function requireAdminAccess(sender) {
   return tabId;
 }
 
-function publicCounts(dataset) { return { termCount: dataset.terms.length, linkCount: dataset.links.length }; }
+function publicCounts(dataset) { return { termCount: dataset.terms.length, linkCount: dataset.links.length, tldCount: dataset.tlds.length, trustedSiteCount: dataset.trustedSites.length }; }
 
 function consoleClockTime() {
   return new Date().toLocaleTimeString([], {
@@ -246,9 +251,12 @@ function logLoadedBlocklists(dataset) {
   const termsFile = profile?.termsFile || 'blockedTerms.csv';
   const termCount = Array.isArray(dataset?.terms) ? dataset.terms.length : 0;
   const linkCount = Array.isArray(dataset?.links) ? dataset.links.length : 0;
+  const tldCount = Array.isArray(dataset?.tlds) ? dataset.tlds.length : 0;
+  const trustedCount = Array.isArray(dataset?.trustedSites) ? dataset.trustedSites.length : 0;
   console.log(
-    `[${consoleClockTime()}] Blocklists loaded: ${termsFile} (${termCount} terms), ` +
-    `blockedLinks.csv (${linkCount} links) — profile ${profileLabel}`
+    `[${consoleClockTime()}] Focus Master lists loaded: ${termsFile} (${termCount} terms), ` +
+    `blockedLinks.csv (${linkCount} links), blockedTLDs.csv (${tldCount} TLDs), ` +
+    `TrustedSites.csv (${trustedCount} trusted rules) — profile ${profileLabel}`
   );
 }
 function publicStorageStatus(dataset) {
@@ -294,6 +302,8 @@ async function fullState(sender) {
     ok: true,
     terms: dataset.terms,
     links: dataset.links,
+    tlds: dataset.tlds,
+    trustedSites: dataset.trustedSites,
     settings,
     adminUnlocked: await isAdminTabUnlocked(tabId),
     storageStatus: publicStorageStatus(dataset),
@@ -314,11 +324,18 @@ function sanitizeAdminPatch(patch) {
   return output;
 }
 
+function normalizerForKind(kind) {
+  if (kind === 'links') return normalizeLinkForStorage;
+  if (kind === 'tlds') return normalizeTldForStorage;
+  if (kind === 'trustedSites') return normalizeTrustedSiteEntry;
+  if (kind === 'terms') return normalizeTerm;
+  throw new Error('Unknown list type.');
+}
+
 async function mutateDataset(kind, operation, payload) {
-  if (kind !== 'terms' && kind !== 'links') throw new Error('Unknown list type.');
+  const normalizer = normalizerForKind(kind);
   const dataset = await loadDataset({ force: true });
-  const normalizer = kind === 'links' ? normalizeLinkForStorage : normalizeTerm;
-  const current = kind === 'links' ? dataset.links : dataset.terms;
+  const current = Array.isArray(dataset[kind]) ? dataset[kind] : [];
   let next = [...current];
   if (operation === 'add') next = uniqueInOrder([...next, payload.value], normalizer);
   else if (operation === 'remove') {
@@ -330,7 +347,10 @@ async function mutateDataset(kind, operation, payload) {
 
   const saved = await saveDataset({
     terms: kind === 'terms' ? next : dataset.terms,
-    links: kind === 'links' ? next : dataset.links
+    links: kind === 'links' ? next : dataset.links,
+    tlds: kind === 'tlds' ? next : dataset.tlds,
+    trustedSites: kind === 'trustedSites' ? next : dataset.trustedSites,
+    profile: dataset.profile
   });
 
   if (operation === 'add' || operation === 'remove') {
@@ -349,6 +369,8 @@ async function mutateDataset(kind, operation, payload) {
     changed: true,
     terms: saved.terms,
     links: saved.links,
+    tlds: saved.tlds,
+    trustedSites: saved.trustedSites,
     storageStatus: publicStorageStatus(saved),
     githubSync: await getGitHubSyncStatus()
   };
@@ -375,7 +397,7 @@ function shouldBypassRedirect(tabId, url) {
 function configuredRedirectTarget(reason, settings, sourceUrl) {
   let configured = '';
   if (reason?.type === 'term' && settings?.redirectTerms) configured = settings.redirectTermsUrl;
-  if (reason?.type === 'link' && settings?.redirectLinks) configured = settings.redirectLinksUrl;
+  if ((reason?.type === 'link' || reason?.type === 'tld') && settings?.redirectLinks) configured = settings.redirectLinksUrl;
   const target = normalizedComparableUrl(configured);
   const source = normalizedComparableUrl(sourceUrl);
   if (!target || target === source) return '';
@@ -395,20 +417,23 @@ function blockedPageUrl(reason, sourceUrl) {
 async function evaluateNavigation(tabId, url, title = '') {
   if (!Number.isInteger(tabId) || tabId < 0) return;
   if (!isSupportedWebUrl(url)) return;
-  await initializeTrustedSites();
   if (shouldBypassRedirect(tabId, url) || redirectInFlight.has(tabId)) return;
   const last = recentlyRedirected.get(tabId);
   if (last && last.url === url && Date.now() - last.at < 1500) return;
 
-  // Priority 1: TrustedSites.csv is a true allow-list. A domain entry exempts
-  // that entire domain (including subdomains and every path/query) from all
-  // Focus Master blocking layers. A path entry exempts only its matching path.
-  if (isCompletelyExcludedUrl(url)) return;
-
+  // Trusted sites now live in the same synchronized dataset as the other
+  // Focus Master rules. Loading the dataset first also applies the current
+  // trusted-domain/path snapshot before any blocking decision is made.
   const [dataset, settings] = await Promise.all([
     loadDataset(),
     getSettings()
   ]);
+
+  // Priority 1: TrustedSites.csv is a true allow-list. A domain entry exempts
+  // that entire domain (including subdomains and every path/query) from all
+  // Focus Master blocking layers, including TLD and fetched-host blocking. A
+  // path entry exempts only its matching path tree.
+  if (isCompletelyExcludedUrl(url)) return;
 
   // Priority 2: the user's own Blocker terms/links apply only after trusted
   // URLs have been exempted above.
@@ -482,8 +507,18 @@ browser.webNavigation.onBeforeNavigate.addListener(details => {
   void evaluateNavigation(details.tabId, details.url, '');
 });
 browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  const url = changeInfo.url || tab.url || '';
-  const title = changeInfo.title || tab.title || '';
+  const urlChanged = typeof changeInfo.url === 'string' && Boolean(changeInfo.url);
+  const titleChanged = typeof changeInfo.title === 'string';
+
+  // Ignore unrelated tab updates. More importantly, never pair a freshly
+  // changed URL with tab.title: Chromium can briefly keep the previous page's
+  // title there during navigation, which can create a false term match on the
+  // destination URL. webNavigation already checks the URL itself, and the
+  // destination title is checked when Chrome reports its actual title update.
+  if (!urlChanged && !titleChanged) return;
+
+  const url = urlChanged ? changeInfo.url : (tab.url || '');
+  const title = !urlChanged && titleChanged ? changeInfo.title : '';
   if (url) void evaluateNavigation(tabId, url, title);
 });
 browser.tabs.onRemoved.addListener(tabId => {
@@ -574,13 +609,25 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return mutateDataset(message.kind, message.mode === 'replace' ? 'replace' : 'merge', { values: Array.isArray(message.values) ? message.values : [] });
       case MESSAGE.replaceAll: {
         const tabId = await requireAdminAccess(sender);
-        const saved = await saveDataset({ terms: message.terms, links: message.links });
-        await Promise.all([queueRemoteSnapshot('terms'), queueRemoteSnapshot('links')]);
+        const current = await loadDataset({ force: true });
+        const saved = await saveDataset({
+          terms: message.terms,
+          links: message.links,
+          tlds: Array.isArray(message.tlds) ? message.tlds : current.tlds,
+          trustedSites: Array.isArray(message.trustedSites) ? message.trustedSites : current.trustedSites,
+          profile: current.profile
+        });
+        const snapshots = [queueRemoteSnapshot('terms'), queueRemoteSnapshot('links')];
+        if (Array.isArray(message.tlds)) snapshots.push(queueRemoteSnapshot('tlds'));
+        if (Array.isArray(message.trustedSites)) snapshots.push(queueRemoteSnapshot('trustedSites'));
+        await Promise.all(snapshots);
         const settings = await updateSettings(sanitizeAdminPatch(message.settings));
         return {
           ok: true,
           terms: saved.terms,
           links: saved.links,
+          tlds: saved.tlds,
+          trustedSites: saved.trustedSites,
           storageStatus: publicStorageStatus(saved),
           settings,
           settingsRestored: true,
@@ -594,6 +641,8 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           ok: true,
           terms: result.dataset.terms,
           links: result.dataset.links,
+          tlds: result.dataset.tlds,
+          trustedSites: result.dataset.trustedSites,
           settings: result.settings,
           adminUnlocked: await isAdminTabUnlocked(tabId),
           storageStatus: publicStorageStatus(result.dataset)
@@ -624,6 +673,8 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           ok: true,
           terms: result.dataset.terms,
           links: result.dataset.links,
+          tlds: result.dataset.tlds,
+          trustedSites: result.dataset.trustedSites,
           storageStatus: publicStorageStatus(result.dataset),
           githubSync: await getGitHubSyncStatus(),
           usedBundledFallback: Boolean(result.usedBundledFallback)
@@ -636,6 +687,8 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           ok: true,
           terms: result.dataset.terms,
           links: result.dataset.links,
+          tlds: result.dataset.tlds,
+          trustedSites: result.dataset.trustedSites,
           storageStatus: publicStorageStatus(result.dataset),
           githubSync: await getGitHubSyncStatus()
         };

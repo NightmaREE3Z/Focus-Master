@@ -85,8 +85,8 @@ function appendHighlightedText(target, text, needle) {
   if (cursor < value.length) target.append(document.createTextNode(value.slice(cursor)));
 }
 
-if (type === 'link') {
-  triggerLabel.textContent = 'ESTETTY SIVU:';
+if (type === 'link' || type === 'tld') {
+  triggerLabel.textContent = type === 'tld' ? 'ESTETTY TLD:' : 'ESTETTY SIVU:';
   attemptedLabel.textContent = 'YRITETTY OSOITE:';
   sourceRow.hidden = true;
 } else {
@@ -96,7 +96,7 @@ if (type === 'link') {
 }
 
 triggerValue.textContent = trigger;
-appendHighlightedText(attemptedValue, attempted || (type === 'link' ? decodedForDisplay(source) : ''), trigger);
+appendHighlightedText(attemptedValue, attempted || ((type === 'link' || type === 'tld') ? decodedForDisplay(source) : ''), trigger);
 appendHighlightedText(sourceValue, decodedForDisplay(source), trigger);
 
 document.querySelector('#closeButton').addEventListener('click', async () => {

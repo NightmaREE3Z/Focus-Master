@@ -8,7 +8,7 @@
     <div class="admin-master-row">
       <div>
         <h2>Enable Focus Master</h2>
-        <p>Turning it off stops both term and link enforcement. Your lists and choices stay saved.</p>
+        <p>Turning it off stops all Focus Master enforcement. Your lists and choices stay saved.</p>
       </div>
       <label class="master-toggle"><input id="enabledToggle" type="checkbox"><span>Focus Master enabled</span></label>
     </div>
@@ -18,7 +18,7 @@
     <h2>Blocking</h2>
     <p>These controls are unavailable while the Focus Master is disabled.</p>
     <label class="checkbox-line"><input id="blockTermsToggle" type="checkbox"> Block search terms and phrases</label>
-    <label class="checkbox-line"><input id="blockLinksToggle" type="checkbox"> Block websites and URL paths</label>
+    <label class="checkbox-line"><input id="blockLinksToggle" type="checkbox"> Block websites, URL paths and TLDs</label>
   </section>
 
   <section id="redirectSettings" class="setting-card protected-dependent-group">
@@ -35,7 +35,7 @@
     </div>
 
     <div id="linkRedirectEditor" class="redirect-editor">
-      <label class="checkbox-line"><input id="redirectLinksToggle" type="checkbox"> Redirect blocked website and path matches</label>
+      <label class="checkbox-line"><input id="redirectLinksToggle" type="checkbox"> Redirect blocked website, path and TLD matches</label>
       <div class="redirect-row">
         <input id="redirectLinksUrlInput" type="url" inputmode="url" autocomplete="url" placeholder="Link redirect URL (for example, example.com)">
         <button id="saveLinkRedirectButton" class="secondary-button" type="button">Save</button>
@@ -60,7 +60,7 @@
 
   <section class="setting-card">
     <h2>Backup</h2>
-    <p>CSV exports preserve list order. JSON stores both ordered lists and all protected settings.</p>
+    <p>CSV exports preserve list order. JSON stores all ordered lists and all protected settings.</p>
     <div class="button-row wrap-buttons">
       <button id="importBackupButton" class="secondary-button" type="button">Restore full JSON</button>
       <button id="exportBackupButton" class="secondary-button" type="button">Export full JSON</button>

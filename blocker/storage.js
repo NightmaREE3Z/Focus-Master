@@ -10,10 +10,12 @@ import {
   normalizeLinkForStorage,
   normalizeRedirectUrl,
   normalizeTerm,
+  normalizeTldForStorage,
   uniqueInOrder
 } from './shared.js';
+import { applyTrustedSiteEntries, normalizeTrustedSiteEntry } from './trusted-sites.js';
 
-
+const DATASET_SCHEMA = 3;
 const GITHUB_CONFIG_KEY = 'bfb:github-sync-config';
 const VALID_PROFILES = new Set(['haukkis', 'tapsa']);
 const REMOTE_BASE = 'https://raw.githubusercontent.com/NightmaREE3Z/Focus-Master/refs/heads/BraveFox/blocker/lists/';
@@ -30,17 +32,32 @@ async function readConfiguredProfileId() {
 
 export async function loadBundledFallbackLists(profileId = 'haukkis') {
   const termFile = termsFilename(profileId);
-  const [termsResponse, linksResponse] = await Promise.all([
-    fetch(browser.runtime.getURL(`blocker/lists/${termFile}`), { cache: 'no-store' }),
-    fetch(browser.runtime.getURL('blocker/lists/blockedLinks.csv'), { cache: 'no-store' })
-  ]);
-  if (!termsResponse.ok || !linksResponse.ok) throw new Error('Bundled BraveFox Focus Master lists could not be loaded.');
-  const [termsText, linksText] = await Promise.all([termsResponse.text(), linksResponse.text()]);
-  return { terms: parseListText(termsText, 'terms'), links: parseListText(linksText, 'links'), profile: normalizeProfileId(profileId) };
+  const files = [
+    [termFile, 'terms'],
+    ['blockedLinks.csv', 'links'],
+    ['blockedTLDs.csv', 'tlds'],
+    ['TrustedSites.csv', 'trustedSites']
+  ];
+  const responses = await Promise.all(files.map(([filename]) =>
+    fetch(browser.runtime.getURL(`blocker/lists/${filename}`), { cache: 'no-store' })
+  ));
+  if (responses.some(response => !response.ok)) throw new Error('Bundled BraveFox Focus Master lists could not be loaded.');
+  const texts = await Promise.all(responses.map(response => response.text()));
+  const output = { profile: normalizeProfileId(profileId) };
+  files.forEach(([, kind], index) => { output[kind] = parseListText(texts[index], kind); });
+  return output;
+}
+
+function filenameForKind(kind, profileId) {
+  if (kind === 'terms') return termsFilename(profileId);
+  if (kind === 'links') return 'blockedLinks.csv';
+  if (kind === 'tlds') return 'blockedTLDs.csv';
+  if (kind === 'trustedSites') return 'TrustedSites.csv';
+  throw new Error('Unknown Focus Master list type.');
 }
 
 async function fetchRemoteList(kind, profileId) {
-  const filename = kind === 'terms' ? termsFilename(profileId) : 'blockedLinks.csv';
+  const filename = filenameForKind(kind, profileId);
   const url = `${REMOTE_BASE}${filename}`;
   const response = await fetch(`${url}?bravefox_refresh=${Date.now()}`, {
     cache: 'no-store', credentials: 'omit', headers: { Accept: 'text/plain' }
@@ -51,17 +68,20 @@ async function fetchRemoteList(kind, profileId) {
 
 export async function loadRemoteFirstLists(profileId = null) {
   const profile = normalizeProfileId(profileId || await readConfiguredProfileId());
-  const results = await Promise.allSettled([fetchRemoteList('terms', profile), fetchRemoteList('links', profile)]);
-  let terms = results[0].status === 'fulfilled' ? results[0].value : null;
-  let links = results[1].status === 'fulfilled' ? results[1].value : null;
-  let usedBundledFallback = false;
-  if (terms === null || links === null) {
-    const bundled = await loadBundledFallbackLists(profile);
-    if (terms === null) terms = bundled.terms;
-    if (links === null) links = bundled.links;
-    usedBundledFallback = true;
+  const kinds = ['terms', 'links', 'tlds', 'trustedSites'];
+  const results = await Promise.allSettled(kinds.map(kind => fetchRemoteList(kind, profile)));
+  const output = { profile, usedBundledFallback: false };
+  let bundled = null;
+  for (let index = 0; index < kinds.length; index += 1) {
+    const kind = kinds[index];
+    if (results[index].status === 'fulfilled') output[kind] = results[index].value;
+    else {
+      bundled ||= await loadBundledFallbackLists(profile);
+      output[kind] = bundled[kind];
+      output.usedBundledFallback = true;
+    }
   }
-  return { terms, links, profile, usedBundledFallback };
+  return output;
 }
 
 const encoder = new TextEncoder();
@@ -104,13 +124,19 @@ function normalizeDatasetSnapshot(value) {
   if (!value || typeof value !== 'object') return null;
   const terms = uniqueInOrder(value.terms, normalizeTerm);
   const links = uniqueInOrder(value.links, normalizeLinkForStorage);
+  const tlds = uniqueInOrder(value.tlds, normalizeTldForStorage);
+  const trustedSites = uniqueInOrder(value.trustedSites, normalizeTrustedSiteEntry);
   const updatedAt = Number(value.updatedAt) || 0;
   const revision = String(value.revision || '');
   const profile = normalizeProfileId(value.profile);
-  if (!revision && !terms.length && !links.length && !updatedAt) return null;
+  const schema = Math.max(2, Number(value.schema) || 2);
+  if (!revision && !terms.length && !links.length && !tlds.length && !trustedSites.length && !updatedAt) return null;
   return {
+    schema,
     terms,
     links,
+    tlds,
+    trustedSites,
     revision,
     profile,
     updatedAt,
@@ -132,28 +158,30 @@ async function writeLocalDataset(snapshot, patch = {}) {
 
 async function readSyncVersion(version) {
   if (!version?.revision) return null;
+  const chunkCounts = {
+    terms: Number(version.termChunks || 0),
+    links: Number(version.linkChunks || 0),
+    tlds: Number(version.tldChunks || 0),
+    trustedSites: Number(version.trustedSiteChunks || 0)
+  };
   const keys = [];
-  for (let i = 0; i < Number(version.termChunks || 0); i += 1) keys.push(revisionKey(version.revision, 'terms', i));
-  for (let i = 0; i < Number(version.linkChunks || 0); i += 1) keys.push(revisionKey(version.revision, 'links', i));
+  for (const [kind, count] of Object.entries(chunkCounts)) {
+    for (let i = 0; i < count; i += 1) keys.push(revisionKey(version.revision, kind, i));
+  }
 
   const values = await browser.storage.sync.get(keys);
-  const terms = [];
-  const links = [];
-
-  for (let i = 0; i < Number(version.termChunks || 0); i += 1) {
-    const chunk = values[revisionKey(version.revision, 'terms', i)];
-    if (!Array.isArray(chunk)) return null;
-    terms.push(...chunk);
-  }
-  for (let i = 0; i < Number(version.linkChunks || 0); i += 1) {
-    const chunk = values[revisionKey(version.revision, 'links', i)];
-    if (!Array.isArray(chunk)) return null;
-    links.push(...chunk);
+  const lists = { terms: [], links: [], tlds: [], trustedSites: [] };
+  for (const [kind, count] of Object.entries(chunkCounts)) {
+    for (let i = 0; i < count; i += 1) {
+      const chunk = values[revisionKey(version.revision, kind, i)];
+      if (!Array.isArray(chunk)) return null;
+      lists[kind].push(...chunk);
+    }
   }
 
   return normalizeDatasetSnapshot({
-    terms,
-    links,
+    schema: Number(version.schema) || 2,
+    ...lists,
     revision: version.revision,
     profile: normalizeProfileId(version.profile),
     updatedAt: version.updatedAt || 0,
@@ -175,41 +203,51 @@ async function readSyncDataset() {
 async function writeSyncDataset(snapshot) {
   const clean = normalizeDatasetSnapshot(snapshot);
   if (!clean) throw new Error('Cannot sync an invalid dataset.');
-  const termChunks = chunkArray(clean.terms);
-  const linkChunks = chunkArray(clean.links);
+  const chunks = {
+    terms: chunkArray(clean.terms),
+    links: chunkArray(clean.links),
+    tlds: chunkArray(clean.tlds),
+    trustedSites: chunkArray(clean.trustedSites)
+  };
   const chunkPayload = {};
-
-  termChunks.forEach((chunk, index) => {
-    chunkPayload[revisionKey(clean.revision, 'terms', index)] = chunk;
-  });
-  linkChunks.forEach((chunk, index) => {
-    chunkPayload[revisionKey(clean.revision, 'links', index)] = chunk;
-  });
+  for (const [kind, kindChunks] of Object.entries(chunks)) {
+    kindChunks.forEach((chunk, index) => {
+      chunkPayload[revisionKey(clean.revision, kind, index)] = chunk;
+    });
+  }
 
   await browser.storage.sync.set(chunkPayload);
 
   const oldResult = await browser.storage.sync.get(STORAGE_KEYS.datasetMeta);
   const oldMeta = oldResult[STORAGE_KEYS.datasetMeta] || { versions: [] };
   const currentVersion = {
+    schema: DATASET_SCHEMA,
     revision: clean.revision,
     profile: clean.profile,
-    termChunks: termChunks.length,
-    linkChunks: linkChunks.length,
+    termChunks: chunks.terms.length,
+    linkChunks: chunks.links.length,
+    tldChunks: chunks.tlds.length,
+    trustedSiteChunks: chunks.trustedSites.length,
     termCount: clean.terms.length,
     linkCount: clean.links.length,
+    tldCount: clean.tlds.length,
+    trustedSiteCount: clean.trustedSites.length,
     updatedAt: clean.updatedAt
   };
   const previous = (Array.isArray(oldMeta.versions) ? oldMeta.versions : [])
     .filter(item => item?.revision && item.revision !== clean.revision)
     .slice(0, 1);
-  const nextMeta = { schema: 2, versions: [currentVersion, ...previous] };
+  const nextMeta = { schema: DATASET_SCHEMA, versions: [currentVersion, ...previous] };
   await browser.storage.sync.set({ [STORAGE_KEYS.datasetMeta]: nextMeta });
 
-  // Verify that Chrome accepted the metadata and every current chunk.
+  // Verify that the browser accepted metadata and every current chunk.
   const verified = await readSyncVersion(currentVersion);
   if (!verified || verified.revision !== clean.revision ||
-      verified.terms.length !== clean.terms.length || verified.links.length !== clean.links.length) {
-    throw new Error('Chrome Sync verification failed after saving the blocklists.');
+      verified.terms.length !== clean.terms.length ||
+      verified.links.length !== clean.links.length ||
+      verified.tlds.length !== clean.tlds.length ||
+      verified.trustedSites.length !== clean.trustedSites.length) {
+    throw new Error('Browser Sync verification failed after saving the Focus Master lists.');
   }
 
   const all = await browser.storage.sync.get(null);
@@ -269,21 +307,32 @@ export async function loadDataset({ force = false } = {}) {
   if (!chosen) {
     try {
       const initial = await loadRemoteFirstLists(activeProfile);
-      chosen = await saveDataset({ terms: initial.terms, links: initial.links, profile: initial.profile });
+      chosen = await saveDataset({
+        terms: initial.terms, links: initial.links, tlds: initial.tlds,
+        trustedSites: initial.trustedSites, profile: initial.profile
+      });
       if (initial.usedBundledFallback) {
         console.warn('[BraveFox Focus Master] One or more remote lists failed; bundled fallback data was used.');
       }
     } catch (error) {
       console.warn('[BraveFox Focus Master] Remote and bundled initial list loading failed:', error);
       chosen = {
-        terms: [],
-        links: [],
-        revision: '',
-        profile: activeProfile,
-        updatedAt: 0,
-        syncPending: false,
+        schema: DATASET_SCHEMA, terms: [], links: [], tlds: [], trustedSites: [],
+        revision: '', profile: activeProfile, updatedAt: 0, syncPending: false,
         syncError: String(error?.message || error)
       };
+    }
+  } else if (chosen.schema < DATASET_SCHEMA) {
+    // One-time upgrade from the older two-list dataset. Preserve the user's
+    // current Terms/Links exactly and seed only the two new global lists.
+    try {
+      const extended = await loadRemoteFirstLists(chosen.profile);
+      chosen = await saveDataset({
+        terms: chosen.terms, links: chosen.links, tlds: extended.tlds,
+        trustedSites: extended.trustedSites, profile: chosen.profile
+      });
+    } catch (error) {
+      console.warn('[BraveFox Focus Master] Extended-list migration failed; current lists remain active:', error);
     }
   }
 
@@ -294,15 +343,19 @@ export async function loadDataset({ force = false } = {}) {
   }
 
   cachedDataset = chosen;
+  applyTrustedSiteEntries(chosen.trustedSites, { source: 'dataset', lastUpdated: chosen.updatedAt });
   return cachedDataset;
 }
 
-export async function saveDataset({ terms, links, profile = '' }) {
+export async function saveDataset({ terms, links, tlds, trustedSites, profile = '' }) {
   const existing = await readLocalDataset();
   const snapshotProfile = normalizeProfileId(profile || existing?.profile || await readConfiguredProfileId());
   const snapshot = {
-    terms: uniqueInOrder(terms, normalizeTerm),
-    links: uniqueInOrder(links, normalizeLinkForStorage),
+    schema: DATASET_SCHEMA,
+    terms: uniqueInOrder(terms ?? existing?.terms ?? [], normalizeTerm),
+    links: uniqueInOrder(links ?? existing?.links ?? [], normalizeLinkForStorage),
+    tlds: uniqueInOrder(tlds ?? existing?.tlds ?? [], normalizeTldForStorage),
+    trustedSites: uniqueInOrder(trustedSites ?? existing?.trustedSites ?? [], normalizeTrustedSiteEntry),
     profile: snapshotProfile,
     revision: makeRevision(),
     updatedAt: Date.now(),
@@ -314,6 +367,7 @@ export async function saveDataset({ terms, links, profile = '' }) {
   // erase a successful import merely because profile sync was delayed or failed.
   await writeLocalDataset(snapshot);
   cachedDataset = snapshot;
+  applyTrustedSiteEntries(snapshot.trustedSites, { source: 'dataset', lastUpdated: snapshot.updatedAt });
   let result = snapshot;
 
   try {
@@ -321,6 +375,7 @@ export async function saveDataset({ terms, links, profile = '' }) {
     result = { ...snapshot, syncPending: false, syncError: '' };
     cachedDataset = result;
     await writeLocalDataset(result);
+    applyTrustedSiteEntries(result.trustedSites, { source: 'dataset', lastUpdated: result.updatedAt });
   } catch (error) {
     result = {
       ...snapshot,
@@ -453,6 +508,8 @@ export async function synchronizeNow() {
     dataset = await saveDataset({
       terms: currentDataset.terms,
       links: currentDataset.links,
+      tlds: currentDataset.tlds,
+      trustedSites: currentDataset.trustedSites,
       profile: currentDataset.profile
     });
   } else {
@@ -465,6 +522,7 @@ export async function synchronizeNow() {
       };
       cachedDataset = dataset;
       await writeLocalDataset(dataset);
+      applyTrustedSiteEntries(dataset.trustedSites, { source: 'dataset', lastUpdated: dataset.updatedAt });
     } catch (error) {
       dataset = {
         ...currentDataset,

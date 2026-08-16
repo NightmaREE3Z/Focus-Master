@@ -1,7 +1,7 @@
-import { parseListText, serializeListCsv } from './csv.js';
+import { parseListText, serializeListForKind } from './csv.js';
 import { loadBundledFallbackLists, loadDataset, saveDataset } from './storage.js';
-import { normalizeLinkForStorage, normalizeTerm, uniqueInOrder } from './shared.js';
-import { getTrustedSitesStatus, initializeTrustedSites, refreshTrustedSites } from './trusted-sites.js';
+import { normalizeLinkForStorage, normalizeTerm, normalizeTldForStorage, uniqueInOrder } from './shared.js';
+import { normalizeTrustedSiteEntry } from './trusted-sites.js';
 
 const browser = globalThis.browser ?? globalThis.chrome;
 const INCOGNITO_CONTEXT = Boolean(browser.extension?.inIncognitoContext);
@@ -45,6 +45,7 @@ export const GITHUB_SYNC_TARGET = Object.freeze({
   owner: 'NightmaREE3Z', repository: 'Focus-Master', branch: 'BraveFox',
   files: Object.freeze({
     links: Object.freeze({ path: 'blocker/lists/blockedLinks.csv', rawUrl: 'https://raw.githubusercontent.com/NightmaREE3Z/Focus-Master/refs/heads/BraveFox/blocker/lists/blockedLinks.csv' }),
+    tlds: Object.freeze({ path: 'blocker/lists/blockedTLDs.csv', rawUrl: 'https://raw.githubusercontent.com/NightmaREE3Z/Focus-Master/refs/heads/BraveFox/blocker/lists/blockedTLDs.csv' }),
     trustedSites: Object.freeze({ path: 'blocker/lists/TrustedSites.csv', rawUrl: 'https://raw.githubusercontent.com/NightmaREE3Z/Focus-Master/refs/heads/BraveFox/blocker/lists/TrustedSites.csv' })
   })
 });
@@ -56,8 +57,8 @@ const DEFAULT_CONFIG = Object.freeze({
 });
 const DEFAULT_STATE = Object.freeze({
   termsProfile: 'haukkis', initializedProfiles: { haukkis: false, tapsa: false },
-  initializedLinks: false, pending: [],
-  forceSnapshot: { links: false, terms: { haukkis: false, tapsa: false } },
+  initializedLinks: false, initializedTlds: false, initializedTrustedSites: false, pending: [],
+  forceSnapshot: { links: false, tlds: false, trustedSites: false, terms: { haukkis: false, tapsa: false } },
   lastSyncAt: 0, lastAction: '', lastError: ''
 });
 let syncPromise = null;
@@ -68,14 +69,22 @@ function profileForEmail(email) {
   for (const profile of Object.values(SYNC_PROFILES)) if (profile.emails.includes(normalized)) return profile.id;
   return '';
 }
-function normalizerFor(kind) { return kind === 'links' ? normalizeLinkForStorage : normalizeTerm; }
-function normalizeKind(kind) { if (kind === 'terms' || kind === 'links') return kind; throw new Error('Unknown GitHub blocklist type.'); }
+function normalizerFor(kind) {
+  if (kind === 'links') return normalizeLinkForStorage;
+  if (kind === 'tlds') return normalizeTldForStorage;
+  if (kind === 'trustedSites') return normalizeTrustedSiteEntry;
+  return normalizeTerm;
+}
+function normalizeKind(kind) {
+  if (kind === 'terms' || kind === 'links' || kind === 'tlds' || kind === 'trustedSites') return kind;
+  throw new Error('Unknown GitHub Focus Master list type.');
+}
 function termsTarget(profileId) {
   const profile = SYNC_PROFILES[normalizeProfile(profileId)];
   const path = `blocker/lists/${profile.termsFile}`;
   return { path, rawUrl: `https://raw.githubusercontent.com/NightmaREE3Z/Focus-Master/refs/heads/BraveFox/${path}` };
 }
-function fileFor(kind, profileId) { return kind === 'terms' ? termsTarget(profileId) : GITHUB_SYNC_TARGET.files.links; }
+function fileFor(kind, profileId) { return kind === 'terms' ? termsTarget(profileId) : GITHUB_SYNC_TARGET.files[normalizeKind(kind)]; }
 
 function normalizeConfig(value) {
   const source = value && typeof value === 'object' ? value : {};
@@ -98,14 +107,17 @@ function normalizeState(value, activeProfile = 'haukkis') {
   const termsProfile = normalizeProfile(source.termsProfile || activeProfile);
   const pending = [];
   for (const item of Array.isArray(source.pending) ? source.pending : []) {
-    if (!item || (item.kind !== 'terms' && item.kind !== 'links')) continue;
+    if (!item || !['terms', 'links', 'tlds', 'trustedSites'].includes(item.kind)) continue;
     if (item.action !== 'add' && item.action !== 'remove') continue;
     const normalized = normalizerFor(item.kind)(item.value);
     if (!normalized) continue;
     pending.push({
-      id: String(item.id || `${Date.now()}-${Math.random()}`), kind: item.kind,
+      id: String(item.id || `${Date.now()}-${Math.random()}`),
+      kind: item.kind,
       profile: item.kind === 'terms' ? normalizeProfile(item.profile || termsProfile) : 'global',
-      action: item.action, value: normalized, createdAt: Number(item.createdAt) || Date.now()
+      action: item.action,
+      value: normalized,
+      createdAt: Number(item.createdAt) || Date.now()
     });
   }
   const initializedProfiles = {
@@ -117,9 +129,13 @@ function normalizeState(value, activeProfile = 'haukkis') {
     termsProfile,
     initializedProfiles,
     initializedLinks: Boolean(source.initializedLinks ?? source.initialized),
+    initializedTlds: Boolean(source.initializedTlds),
+    initializedTrustedSites: Boolean(source.initializedTrustedSites),
     pending,
     forceSnapshot: {
       links: Boolean(source.forceSnapshot?.links),
+      tlds: Boolean(source.forceSnapshot?.tlds),
+      trustedSites: Boolean(source.forceSnapshot?.trustedSites),
       terms: {
         haukkis: Boolean(source.forceSnapshot?.terms?.haukkis ?? (source.forceSnapshot?.terms === true && termsProfile === 'haukkis')),
         tapsa: Boolean(source.forceSnapshot?.terms?.tapsa ?? (source.forceSnapshot?.terms === true && termsProfile === 'tapsa'))
@@ -516,25 +532,31 @@ function decodeBase64Utf8(base64) { const binary=atob(String(base64||'').replace
 async function fetchRawKind(kind, profileId) {
   const file = fileFor(normalizeKind(kind), profileId);
   const response = await fetch(`${file.rawUrl}?bravefox_refresh=${Date.now()}`, { cache:'no-store', credentials:'omit', headers:{Accept:'text/plain'} });
-  if (!response.ok) throw new Error(`GitHub raw ${kind} download failed (HTTP ${response.status}).`);
+  if (!response.ok) {
+    const error = new Error(`GitHub raw ${kind} download failed (HTTP ${response.status}).`);
+    error.status = response.status;
+    throw error;
+  }
   return parseListText(await response.text(), kind);
 }
-async function fetchRawLists({ profileId = 'haukkis', bundledFallback = false, includeTerms = true, includeLinks = true } = {}) {
+async function fetchRawLists({ profileId = 'haukkis', bundledFallback = false } = {}) {
   const profile = normalizeProfile(profileId);
-  const tasks = [includeTerms ? fetchRawKind('terms', profile) : Promise.resolve(null), includeLinks ? fetchRawKind('links', profile) : Promise.resolve(null)];
-  const results = await Promise.allSettled(tasks);
-  let terms = includeTerms && results[0].status === 'fulfilled' ? results[0].value : null;
-  let links = includeLinks && results[1].status === 'fulfilled' ? results[1].value : null;
-  let usedBundledFallback = false;
-  if (bundledFallback && ((includeTerms && terms === null) || (includeLinks && links === null))) {
-    const bundled = await loadBundledFallbackLists(profile);
-    if (includeTerms && terms === null) terms = bundled.terms;
-    if (includeLinks && links === null) links = bundled.links;
-    usedBundledFallback = true;
+  const kinds = ['terms', 'links', 'tlds', 'trustedSites'];
+  const results = await Promise.allSettled(kinds.map(kind => fetchRawKind(kind, profile)));
+  const output = { profile, usedBundledFallback: false };
+  let bundled = null;
+  for (let index = 0; index < kinds.length; index += 1) {
+    const kind = kinds[index];
+    if (results[index].status === 'fulfilled') output[kind] = results[index].value;
+    else if (bundledFallback) {
+      bundled ||= await loadBundledFallbackLists(profile);
+      output[kind] = bundled[kind];
+      output.usedBundledFallback = true;
+    } else {
+      throw results[index].reason || new Error(`GitHub ${kind} download failed.`);
+    }
   }
-  if (includeTerms && terms === null) throw results[0].reason || new Error('GitHub terms download failed.');
-  if (includeLinks && links === null) throw results[1].reason || new Error('GitHub links download failed.');
-  return { terms, links, profile, usedBundledFallback };
+  return output;
 }
 
 async function fetchApiKind(kind, token, profileId) {
@@ -547,7 +569,7 @@ async function fetchApiKind(kind, token, profileId) {
 }
 async function putApiKind(kind, token, values, sha, profileId) {
   const file=fileFor(kind,profileId);
-  const body={ message:`Sync BraveFox Focus Master ${file.path.split('/').pop()}`, content:encodeBase64Utf8(serializeListCsv(values)), branch:GITHUB_SYNC_TARGET.branch };
+  const body={ message:`Sync BraveFox Focus Master ${file.path.split('/').pop()}`, content:encodeBase64Utf8(serializeListForKind(values, kind)), branch:GITHUB_SYNC_TARGET.branch };
   if (sha) body.sha=sha;
   const response=await fetch(apiUrl(kind,profileId),{method:'PUT',credentials:'omit',headers:{...githubHeaders(token),'Content-Type':'application/json'},body:JSON.stringify(body)});
   if (response.status===409 || response.status===422) { const error=new Error(`GitHub ${kind} update conflicted with a newer revision.`); error.code='conflict'; throw error; }
@@ -555,35 +577,94 @@ async function putApiKind(kind, token, values, sha, profileId) {
   return response.json();
 }
 function arraysEqual(left,right){return Array.isArray(left)&&Array.isArray(right)&&left.length===right.length&&left.every((v,i)=>v===right[i]);}
-async function saveDatasetIfChanged(current,next,profile){
-  const terms=uniqueInOrder(next.terms,normalizeTerm), links=uniqueInOrder(next.links,normalizeLinkForStorage), normalizedProfile=normalizeProfile(profile||current?.profile);
-  if (arraysEqual(current?.terms,terms)&&arraysEqual(current?.links,links)&&current?.profile===normalizedProfile) return current;
-  return saveDataset({terms,links,profile:normalizedProfile});
+async function saveDatasetIfChanged(current, next, profile) {
+  const terms = uniqueInOrder(next.terms, normalizeTerm);
+  const links = uniqueInOrder(next.links, normalizeLinkForStorage);
+  const tlds = uniqueInOrder(next.tlds, normalizeTldForStorage);
+  const trustedSites = uniqueInOrder(next.trustedSites, normalizeTrustedSiteEntry);
+  const normalizedProfile = normalizeProfile(profile || current?.profile);
+  if (
+    arraysEqual(current?.terms, terms) &&
+    arraysEqual(current?.links, links) &&
+    arraysEqual(current?.tlds, tlds) &&
+    arraysEqual(current?.trustedSites, trustedSites) &&
+    current?.profile === normalizedProfile
+  ) return current;
+  return saveDataset({ terms, links, tlds, trustedSites, profile: normalizedProfile });
 }
-function scopeFor(kind,profile){return kind==='terms'?normalizeProfile(profile):'global';}
-function pendingFor(state,kind,profile){const scope=scopeFor(kind,profile);return state.pending.filter(item=>item.kind===kind&&item.profile===scope);}
-function forceFor(state,kind,profile){return kind==='links'?state.forceSnapshot.links:Boolean(state.forceSnapshot.terms[normalizeProfile(profile)]);}
-function setForce(state,kind,profile,value){const next={...state,forceSnapshot:{links:state.forceSnapshot.links,terms:{...state.forceSnapshot.terms}}};if(kind==='links')next.forceSnapshot.links=Boolean(value);else next.forceSnapshot.terms[normalizeProfile(profile)]=Boolean(value);return next;}
-function clearPending(state,kind,profile){const scope=scopeFor(kind,profile);return setForce({...state,pending:state.pending.filter(item=>!(item.kind===kind&&item.profile===scope))},kind,profile,false);}
-function applyOperations(values,kind,operations){const normalize=normalizerFor(kind);let next=uniqueInOrder(values,normalize);for(const op of operations){const value=normalize(op.value);if(!value)continue;if(op.action==='remove')next=next.filter(item=>normalize(item)!==value);else if(!next.some(item=>normalize(item)===value))next.push(value);}return next;}
+function scopeFor(kind, profile) { return kind === 'terms' ? normalizeProfile(profile) : 'global'; }
+function pendingFor(state, kind, profile) {
+  const scope = scopeFor(kind, profile);
+  return state.pending.filter(item => item.kind === kind && item.profile === scope);
+}
+function forceFor(state, kind, profile) {
+  if (kind === 'terms') return Boolean(state.forceSnapshot.terms[normalizeProfile(profile)]);
+  return Boolean(state.forceSnapshot[kind]);
+}
+function setForce(state, kind, profile, value) {
+  const next = {
+    ...state,
+    forceSnapshot: {
+      links: Boolean(state.forceSnapshot.links),
+      tlds: Boolean(state.forceSnapshot.tlds),
+      trustedSites: Boolean(state.forceSnapshot.trustedSites),
+      terms: { ...state.forceSnapshot.terms }
+    }
+  };
+  if (kind === 'terms') next.forceSnapshot.terms[normalizeProfile(profile)] = Boolean(value);
+  else next.forceSnapshot[kind] = Boolean(value);
+  return next;
+}
+function clearPending(state, kind, profile) {
+  const scope = scopeFor(kind, profile);
+  return setForce({ ...state, pending: state.pending.filter(item => !(item.kind === kind && item.profile === scope)) }, kind, profile, false);
+}
+function applyOperations(values, kind, operations) {
+  const normalize = normalizerFor(kind);
+  let next = uniqueInOrder(values, normalize);
+  for (const op of operations) {
+    const value = normalize(op.value);
+    if (!value) continue;
+    if (op.action === 'remove') next = next.filter(item => normalize(item) !== value);
+    else if (!next.some(item => normalize(item) === value)) next.push(value);
+  }
+  return next;
+}
+
 async function hasRequiredDataConsent(){const manifest=browser.runtime.getManifest();if(!manifest?.browser_specific_settings?.gecko)return true;try{const permissions=await browser.permissions.getAll();const granted=new Set(Array.isArray(permissions.data_collection)?permissions.data_collection:[]);return REQUIRED_DATA_COLLECTION.every(item=>granted.has(item));}catch{return false;}}
 async function uploadExactKind(kind,token,values,profile){for(let attempt=0;attempt<3;attempt++){const remote=await fetchApiKind(kind,token,profile);try{await putApiKind(kind,token,uniqueInOrder(values,normalizerFor(kind)),remote.sha,profile);return uniqueInOrder(values,normalizerFor(kind));}catch(error){if(error.code!=='conflict'||attempt===2)throw error;}}return values;}
 async function uploadMergedKind(kind,token,current,state,profile){for(let attempt=0;attempt<3;attempt++){const remote=await fetchApiKind(kind,token,profile);const values=forceFor(state,kind,profile)?uniqueInOrder(current,normalizerFor(kind)):applyOperations(remote.values,kind,pendingFor(state,kind,profile));try{await putApiKind(kind,token,values,remote.sha,profile);return values;}catch(error){if(error.code!=='conflict'||attempt===2)throw error;}}return current;}
 async function setStatus(state,{action='',error='',synced=false}={}){return writeState({...state,lastAction:action||state.lastAction,lastError:String(error||''),lastSyncAt:synced?Date.now():state.lastSyncAt});}
 
 export async function getGitHubSyncStatus(){
-  const refreshed=await refreshProfileDetection({includeRecord:true}); const config=refreshed.config; const record=refreshed.record; const state=await readState(config); const profile=SYNC_PROFILES[config.activeProfile]; const trusted=getTrustedSitesStatus();
+  const refreshed=await refreshProfileDetection({includeRecord:true});
+  const config=refreshed.config;
+  const record=refreshed.record;
+  const state=await readState(config);
+  const profile=SYNC_PROFILES[config.activeProfile];
   return {
-    autoSync:config.autoSync,hasToken:Boolean(config.token),tokenRecovery:config.tokenRecovery,recoverySupported:record.recoverySupported,recoveryEligible:record.recoveryEligible,recoveryAuthorized:record.recoveryAuthorized,recoveryAuthorizationRequired:record.recoveryAuthorizationRequired,recoveryAccountEmail:record.recoveryAccountEmail,recoveryBlockedReason:record.recoveryBlockedReason,recoveryReady:record.recoveryReady,recoveredFromGoogleDrive:record.recoveredFromGoogleDrive,recoveryRemoteModifiedTime:record.recoveryRemoteModifiedTime,recoveryError:record.recoveryError,activeProfile:config.activeProfile,activeProfileLabel:profile.label,
+    autoSync:config.autoSync,hasToken:Boolean(config.token),tokenRecovery:config.tokenRecovery,
+    recoverySupported:record.recoverySupported,recoveryEligible:record.recoveryEligible,
+    recoveryAuthorized:record.recoveryAuthorized,recoveryAuthorizationRequired:record.recoveryAuthorizationRequired,
+    recoveryAccountEmail:record.recoveryAccountEmail,recoveryBlockedReason:record.recoveryBlockedReason,
+    recoveryReady:record.recoveryReady,recoveredFromGoogleDrive:record.recoveredFromGoogleDrive,
+    recoveryRemoteModifiedTime:record.recoveryRemoteModifiedTime,recoveryError:record.recoveryError,
+    activeProfile:config.activeProfile,activeProfileLabel:profile.label,
     termsProfile:state.termsProfile,termsProfileLabel:SYNC_PROFILES[state.termsProfile].label,
     profileSwitchPending:config.profileSwitchPending,suggestedProfile:config.suggestedProfile,
     suggestedProfileLabel:config.suggestedProfile?SYNC_PROFILES[config.suggestedProfile].label:'',
     detectedEmail:config.detectedEmail,detectionAvailable:config.detectionAvailable,
     profiles:Object.values(SYNC_PROFILES).map(item=>({id:item.id,label:item.label,termsFile:item.termsFile,emails:[...item.emails]})),
-    pendingCount:state.pending.length+Number(state.forceSnapshot.links)+Number(state.forceSnapshot.terms.haukkis)+Number(state.forceSnapshot.terms.tapsa),
+    pendingCount:state.pending.length+
+      Number(state.forceSnapshot.links)+Number(state.forceSnapshot.tlds)+Number(state.forceSnapshot.trustedSites)+
+      Number(state.forceSnapshot.terms.haukkis)+Number(state.forceSnapshot.terms.tapsa),
     lastSyncAt:state.lastSyncAt,lastAction:state.lastAction,lastError:state.lastError,
-    trustedSites:trusted,
-    target:{owner:GITHUB_SYNC_TARGET.owner,repository:GITHUB_SYNC_TARGET.repository,branch:GITHUB_SYNC_TARGET.branch,files:{terms:termsTarget(config.activeProfile),links:GITHUB_SYNC_TARGET.files.links,trustedSites:GITHUB_SYNC_TARGET.files.trustedSites}}
+    target:{owner:GITHUB_SYNC_TARGET.owner,repository:GITHUB_SYNC_TARGET.repository,branch:GITHUB_SYNC_TARGET.branch,files:{
+      terms:termsTarget(config.activeProfile),
+      links:GITHUB_SYNC_TARGET.files.links,
+      tlds:GITHUB_SYNC_TARGET.files.tlds,
+      trustedSites:GITHUB_SYNC_TARGET.files.trustedSites
+    }}
   };
 }
 
@@ -620,60 +701,159 @@ export async function queueRemoteSnapshot(kind){
 export function scheduleAutomaticGitHubSync(){try{browser.alarms.clear(DEBOUNCED_SYNC_ALARM);browser.alarms.create(DEBOUNCED_SYNC_ALARM,{when:Date.now()+DEBOUNCE_MS});}catch{}}
 
 export async function downloadGitHubLists({allowBundledFallback=true}={}){
-  let config=await readConfig(); const profile=config.activeProfile; const downloaded=await fetchRawLists({profileId:profile,bundledFallback:allowBundledFallback});
-  const dataset=await saveDataset({terms:downloaded.terms,links:downloaded.links,profile}); let state=await readState(config);
-  state=clearPending(state,'terms',profile); state=clearPending(state,'links','global'); state.termsProfile=profile; state.initializedProfiles[profile]=true; state.initializedLinks=true;
+  let config=await readConfig();
+  const profile=config.activeProfile;
+  const downloaded=await fetchRawLists({profileId:profile,bundledFallback:allowBundledFallback});
+  const dataset=await saveDataset({
+    terms:downloaded.terms,links:downloaded.links,tlds:downloaded.tlds,
+    trustedSites:downloaded.trustedSites,profile
+  });
+  let state=await readState(config);
+  for(const kind of ['terms','links','tlds','trustedSites']) state=clearPending(state,kind,kind==='terms'?profile:'global');
+  state.termsProfile=profile;
+  state.initializedProfiles[profile]=true;
+  state.initializedLinks=true;
+  state.initializedTlds=true;
+  state.initializedTrustedSites=true;
   state=await setStatus(state,{action:downloaded.usedBundledFallback?'Loaded packaged fallback lists':'Downloaded from GitHub',synced:true});
   config=await writeConfig({...config,profileSwitchPending:false,previousProfile:''});
-  await refreshTrustedSites({reason:'manual GitHub download'});
   return {dataset,state,usedBundledFallback:downloaded.usedBundledFallback};
 }
 
 export async function uploadGitHubLists(){
-  let config=await readConfig(); if(!config.token)throw new Error('Enter and save a fine-grained GitHub token before uploading.'); if(!(await hasRequiredDataConsent()))throw new Error('GitHub upload permission has not been granted.');
-  const profile=config.activeProfile; const local=await loadDataset({force:true}); let state=await readState(config);
-  const terms=await uploadExactKind('terms',config.token,local.terms,profile); state=clearPending(state,'terms',profile); await writeState(state,config);
-  const links=await uploadExactKind('links',config.token,local.links,'global'); state=clearPending(state,'links','global'); state.termsProfile=profile; state.initializedProfiles[profile]=true; state.initializedLinks=true;
-  state=await setStatus(state,{action:'Uploaded to GitHub',synced:true}); config=await writeConfig({...config,profileSwitchPending:false,previousProfile:''});
-  const dataset=await saveDatasetIfChanged(local,{terms,links},profile); await refreshTrustedSites({reason:'manual GitHub upload'}); return {dataset,state};
+  let config=await readConfig();
+  if(!config.token)throw new Error('Enter and save a fine-grained GitHub token before uploading.');
+  if(!(await hasRequiredDataConsent()))throw new Error('GitHub upload permission has not been granted.');
+  const profile=config.activeProfile;
+  const local=await loadDataset({force:true});
+  let state=await readState(config);
+  const uploaded={};
+  for(const kind of ['terms','links','tlds','trustedSites']){
+    const scope=kind==='terms'?profile:'global';
+    uploaded[kind]=await uploadExactKind(kind,config.token,local[kind],scope);
+    state=clearPending(state,kind,scope);
+    await writeState(state,config);
+  }
+  state.termsProfile=profile;
+  state.initializedProfiles[profile]=true;
+  state.initializedLinks=true;
+  state.initializedTlds=true;
+  state.initializedTrustedSites=true;
+  state=await setStatus(state,{action:'Uploaded to GitHub',synced:true});
+  config=await writeConfig({...config,profileSwitchPending:false,previousProfile:''});
+  const dataset=await saveDatasetIfChanged(local,uploaded,profile);
+  return {dataset,state};
+}
+
+function isInitializedKind(state,kind,profile){
+  if(kind==='terms') return Boolean(state.initializedProfiles[normalizeProfile(profile)]);
+  if(kind==='links') return Boolean(state.initializedLinks);
+  if(kind==='tlds') return Boolean(state.initializedTlds);
+  if(kind==='trustedSites') return Boolean(state.initializedTrustedSites);
+  return false;
+}
+function markInitializedKind(state,kind,profile){
+  if(kind==='terms') state.initializedProfiles[normalizeProfile(profile)]=true;
+  else if(kind==='links') state.initializedLinks=true;
+  else if(kind==='tlds') state.initializedTlds=true;
+  else if(kind==='trustedSites') state.initializedTrustedSites=true;
+  return state;
 }
 
 async function initializeKind(kind,profile,current,state,canUpload){
-  const remote=await fetchRawKind(kind,profile).catch(async()=>{const bundled=await loadBundledFallbackLists(profile);return kind==='terms'?bundled.terms:bundled.links;});
-  const normalize=normalizerFor(kind); const merged=uniqueInOrder([...remote,...current],normalize); const hasLocalExtra=current.some(value=>!remote.includes(normalize(value)));
-  state=setForce(state,kind,profile,hasLocalExtra); if(kind==='terms')state.initializedProfiles[normalizeProfile(profile)]=true;else state.initializedLinks=true;
-  if(hasLocalExtra&&canUpload){const uploaded=await uploadExactKind(kind,(await readConfig()).token,merged,profile);state=clearPending(state,kind,profile);return{values:uploaded,state};}
-  return{values:merged,state};
+  let remote;
+  let missingRemote=false;
+  try {
+    remote=await fetchRawKind(kind,profile);
+  } catch(error) {
+    const bundled=await loadBundledFallbackLists(profile);
+    remote=bundled[kind];
+    missingRemote=Number(error?.status)===404;
+  }
+  const normalize=normalizerFor(kind);
+  const merged=uniqueInOrder([...remote,...current],normalize);
+  const remoteSet=new Set(remote.map(normalize));
+  const hasLocalExtra=current.some(value=>!remoteSet.has(normalize(value)));
+  state=setForce(state,kind,profile,hasLocalExtra);
+  state=markInitializedKind(state,kind,profile);
+  if((hasLocalExtra||missingRemote)&&canUpload){
+    const uploaded=await uploadExactKind(kind,(await readConfig()).token,merged,profile);
+    state=clearPending(state,kind,profile);
+    return{values:uploaded,state,uploaded:true};
+  }
+  return{
+    values:merged,
+    state,
+    warning:missingRemote?'The GitHub list does not exist yet; the packaged/local copy remains active until an upload creates it.':''
+  };
 }
 
 async function syncKind(kind,profile,current,state,canUpload){
   const hasPending=forceFor(state,kind,profile)||pendingFor(state,kind,profile).length>0;
-  if(hasPending&&canUpload){const values=await uploadMergedKind(kind,(await readConfig()).token,current,state,profile);return{values,state:clearPending(state,kind,profile),uploaded:true};}
-  const remote=await fetchRawKind(kind,profile);
-  if(hasPending){const values=forceFor(state,kind,profile)?current:applyOperations(remote,kind,pendingFor(state,kind,profile));return{values,state,warning:'Pending changes are local until a token and upload consent are available.'};}
+  if(hasPending&&canUpload){
+    const values=await uploadMergedKind(kind,(await readConfig()).token,current,state,profile);
+    return{values,state:clearPending(state,kind,profile),uploaded:true};
+  }
+  let remote;
+  try {
+    remote=await fetchRawKind(kind,profile);
+  } catch(error) {
+    if(Number(error?.status)!==404) throw error;
+    if(canUpload){
+      const values=await uploadExactKind(kind,(await readConfig()).token,current,profile);
+      return{values,state:clearPending(state,kind,profile),uploaded:true};
+    }
+    return{values:current,state,warning:'The GitHub list does not exist yet; the current local copy remains active until an upload creates it.'};
+  }
+  if(hasPending){
+    const values=forceFor(state,kind,profile)?current:applyOperations(remote,kind,pendingFor(state,kind,profile));
+    return{values,state,warning:'Pending changes are local until a token and upload consent are available.'};
+  }
   return{values:remote,state};
 }
 
 async function runAutomaticSyncInternal(){
-  let config=await refreshProfileDetection(); if(!config.autoSync)return{skipped:true,reason:'Automatic sync is disabled.'};
-  await initializeTrustedSites(); await refreshTrustedSites({reason:'automatic sync'}).catch(()=>{});
-  let state=await readState(config); const local=await loadDataset({force:true}); const canUpload=Boolean(config.token)&&await hasRequiredDataConsent();
-  const termsEnabled=!config.profileSwitchPending&&state.termsProfile===config.activeProfile; let terms=local.terms,links=local.links; let warning=''; let uploaded=false;
+  let config=await refreshProfileDetection();
+  if(!config.autoSync)return{skipped:true,reason:'Automatic sync is disabled.'};
+  let state=await readState(config);
+  const local=await loadDataset({force:true});
+  const canUpload=Boolean(config.token)&&await hasRequiredDataConsent();
+  const termsEnabled=!config.profileSwitchPending&&state.termsProfile===config.activeProfile;
+  const next={terms:local.terms,links:local.links,tlds:local.tlds,trustedSites:local.trustedSites};
+  let warning='';
+  let uploaded=false;
   try{
     if(termsEnabled){
-      if(!state.initializedProfiles[config.activeProfile]){const result=await initializeKind('terms',config.activeProfile,terms,state,canUpload);terms=result.values;state=result.state;}
-      else{const result=await syncKind('terms',config.activeProfile,terms,state,canUpload);terms=result.values;state=result.state;warning=warning||result.warning||'';uploaded=uploaded||result.uploaded;}
-    } else if(config.profileSwitchPending) warning=`Sync Profile changed to ${SYNC_PROFILES[config.activeProfile].label}; terms remain on ${SYNC_PROFILES[state.termsProfile].label} until manual Download or Upload.`;
-    if(!state.initializedLinks){const result=await initializeKind('links','global',links,state,canUpload);links=result.values;state=result.state;}
-    else{const result=await syncKind('links','global',links,state,canUpload);links=result.values;state=result.state;warning=warning||result.warning||'';uploaded=uploaded||result.uploaded;}
-    state=await writeState(state,config); const dataset=await saveDatasetIfChanged(local,{terms,links},state.termsProfile);
+      const kind='terms';
+      const profile=config.activeProfile;
+      const result=!isInitializedKind(state,kind,profile)
+        ? await initializeKind(kind,profile,next[kind],state,canUpload)
+        : await syncKind(kind,profile,next[kind],state,canUpload);
+      next[kind]=result.values;state=result.state;warning=warning||result.warning||'';uploaded=uploaded||Boolean(result.uploaded);
+    } else if(config.profileSwitchPending) {
+      warning=`Sync Profile changed to ${SYNC_PROFILES[config.activeProfile].label}; terms remain on ${SYNC_PROFILES[state.termsProfile].label} until manual Download or Upload.`;
+    }
+
+    for(const kind of ['links','tlds','trustedSites']){
+      const result=!isInitializedKind(state,kind,'global')
+        ? await initializeKind(kind,'global',next[kind],state,canUpload)
+        : await syncKind(kind,'global',next[kind],state,canUpload);
+      next[kind]=result.values;state=result.state;warning=warning||result.warning||'';uploaded=uploaded||Boolean(result.uploaded);
+    }
+
+    state=await writeState(state,config);
+    const dataset=await saveDatasetIfChanged(local,next,state.termsProfile);
     state=await setStatus(state,{action:uploaded?'Automatic GitHub upload':'Automatic GitHub download',error:warning,synced:true});
     return{dataset,state,direction:uploaded?'upload':'download'};
-  }catch(error){state=await setStatus(state,{action:state.lastAction||'Automatic GitHub sync',error:String(error?.message||error),synced:false});throw error;}
+  }catch(error){
+    state=await setStatus(state,{action:state.lastAction||'Automatic GitHub sync',error:String(error?.message||error),synced:false});
+    throw error;
+  }
 }
+
 export async function runAutomaticGitHubSync(){if(INCOGNITO_CONTEXT)return{skipped:true,reason:'GitHub sync is disabled in Incognito.'};if(syncPromise)return syncPromise;syncPromise=runAutomaticSyncInternal().finally(()=>{syncPromise=null;});return syncPromise;}
 function setupGitHubSyncAlarms(config=DEFAULT_CONFIG){if(config.autoSync)browser.alarms.create(AUTO_SYNC_ALARM,{periodInMinutes:AUTO_SYNC_INTERVAL_MINUTES});else{void browser.alarms.clear(AUTO_SYNC_ALARM);void browser.alarms.clear(DEBOUNCED_SYNC_ALARM);}}
-export async function initializeGitHubSync(){if(INCOGNITO_CONTEXT){void browser.alarms.clear(AUTO_SYNC_ALARM);void browser.alarms.clear(DEBOUNCED_SYNC_ALARM);void browser.alarms.clear(PAT_RECOVERY_RETRY_ALARM);await initializeTrustedSites();return{skipped:true,incognito:true,reason:'Management sync and profile detection are disabled in Incognito.'};}const config=await refreshProfileDetection({allowInitialSelection:true});const state=await readState(config);if(!state.termsProfile)state.termsProfile=config.activeProfile;await writeState(state,config);setupGitHubSyncAlarms(config);if(config.tokenRecovery&&!config.token){try{browser.alarms.create(PAT_RECOVERY_RETRY_ALARM,{when:Date.now()+30000});}catch{}}else{void browser.alarms.clear(PAT_RECOVERY_RETRY_ALARM);}await initializeTrustedSites();if(config.autoSync)scheduleAutomaticGitHubSync();return getGitHubSyncStatus();}
+export async function initializeGitHubSync(){if(INCOGNITO_CONTEXT){void browser.alarms.clear(AUTO_SYNC_ALARM);void browser.alarms.clear(DEBOUNCED_SYNC_ALARM);void browser.alarms.clear(PAT_RECOVERY_RETRY_ALARM);return{skipped:true,incognito:true,reason:'Management sync and profile detection are disabled in Incognito.'};}const config=await refreshProfileDetection({allowInitialSelection:true});const state=await readState(config);if(!state.termsProfile)state.termsProfile=config.activeProfile;await writeState(state,config);setupGitHubSyncAlarms(config);if(config.tokenRecovery&&!config.token){try{browser.alarms.create(PAT_RECOVERY_RETRY_ALARM,{when:Date.now()+30000});}catch{}}else{void browser.alarms.clear(PAT_RECOVERY_RETRY_ALARM);}if(config.autoSync)scheduleAutomaticGitHubSync();return getGitHubSyncStatus();}
 browser.alarms.onAlarm.addListener(alarm=>{if(INCOGNITO_CONTEXT)return;if(alarm.name!==AUTO_SYNC_ALARM&&alarm.name!==DEBOUNCED_SYNC_ALARM&&alarm.name!==PAT_RECOVERY_RETRY_ALARM)return;void runAutomaticGitHubSync().catch(error=>console.warn(`${LOG_PREFIX} Automatic sync failed; the last valid local lists remain active:`,error));});
 browser.runtime.onStartup.addListener(()=>{if(!INCOGNITO_CONTEXT)void initializeGitHubSync();});
 browser.runtime.onInstalled.addListener(()=>{if(!INCOGNITO_CONTEXT)void initializeGitHubSync();});

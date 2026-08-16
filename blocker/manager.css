@@ -37,6 +37,22 @@ input:focus, select:focus { border-color: #6574dc; box-shadow: 0 0 0 3px rgba(10
 .secondary-button:hover { background: #e2e5ff; }
 .ghost-button { color: #e6ebff; background: rgba(255,255,255,.10); }
 .items { max-height: calc(100vh - 270px); overflow: auto; }
+.split-list-shell { display: grid; gap: 18px; }
+.list-subpanel { display: grid; gap: 0; }
+.subpanel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
+.subpanel-heading h2 { margin: 0 0 5px; font-size: 20px; }
+.subpanel-heading p { margin: 0; color: #6b7280; line-height: 1.45; }
+.count-pill { flex: 0 0 auto; min-width: 34px; padding: 4px 9px; border-radius: 999px; background: #eef0ff; color: #4652b8; text-align: center; font-size: 12px; font-weight: 800; }
+.split-list-shell .items { max-height: min(34vh, 420px); }
+.item-main { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.item-kind-badge { flex: 0 0 auto; min-width: 52px; padding: 3px 7px; border-radius: 999px; background: #eef2f7; color: #475569; text-align: center; font-size: 10px; line-height: 1.35; font-weight: 850; letter-spacing: .045em; }
+.item-kind-badge.tld { background: #fff3dd; color: #9a5b08; }
+.item-kind-badge.domain { background: #e8f7ef; color: #167247; }
+.item-kind-badge.path { background: #e9f1ff; color: #2859a7; }
+.item-kind-badge.link { background: #f0edff; color: #5b44a5; }
+.item-value { min-width: 0; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #f3f5f9; border-radius: 6px; padding: 1px 5px; }
+
 .item { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; padding: 12px 4px; border-bottom: 1px solid #f0f2f7; }
 .item-value { overflow-wrap: anywhere; }
 .remove-button { border: 0; border-radius: 8px; background: #fff0f1; color: #b42332; padding: 7px 10px; font-weight: 700; }
@@ -72,6 +88,13 @@ input:focus, select:focus { border-color: #6574dc; box-shadow: 0 0 0 3px rgba(10
 .toast.show { opacity: 1; transform: translateY(0); }
 .boot-screen { min-height: 100vh; display: grid; place-items: center; align-content: center; gap: 12px; color: #334155; }
 .boot-icon { width: 54px; height: 54px; border-radius: 12px; }
+.trusted-type-bar { display: flex; align-items: center; gap: 9px; margin: 0 0 14px; }
+.trusted-type-label { color: #6b7280; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+.trusted-type-filter { width: auto; min-width: 128px; border: 0; border-radius: 999px; padding: 7px 32px 7px 12px; font-size: 11px; line-height: 1.2; font-weight: 850; letter-spacing: .045em; cursor: pointer; box-shadow: none; }
+.trusted-type-filter.domain { background: #e8f7ef; color: #167247; }
+.trusted-type-filter.path { background: #e9f1ff; color: #2859a7; }
+.trusted-type-filter:focus { border: 0; box-shadow: 0 0 0 3px rgba(101,116,220,.13); }
+.trusted-type-help { color: #7c8598; font-size: 12px; }
 .order-note { margin: 12px 2px 2px; color: #6b7280; font-size: 12px; }
 button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity: .58; }
 [hidden] { display: none !important; }
@@ -94,7 +117,7 @@ html[data-platform="android"] .brand { padding: 0 2px 8px; }
 html[data-platform="android"] .brand-icon { width: 34px; height: 34px; }
 html[data-platform="android"] .brand strong { font-size: 16px; }
 html[data-platform="android"] .brand span { font-size: 12px; }
-html[data-platform="android"] .sidebar nav { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+html[data-platform="android"] .sidebar nav { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 html[data-platform="android"] .nav-button { padding: 10px 8px; justify-content: center; gap: 6px; text-align: center; font-size: 13px; }
 html[data-platform="android"] .nav-button span { padding: 1px 6px; }
 html[data-platform="android"] .sidebar-footer { margin-top: 0; padding: 2px 0 0; grid-template-columns: 1fr 1fr; gap: 7px; }
@@ -109,9 +132,12 @@ html[data-platform="android"] .add-row,
 html[data-platform="android"] .toolbar,
 html[data-platform="android"] .password-row,
 html[data-platform="android"] .redirect-row { grid-template-columns: 1fr; }
+html[data-platform="android"] .trusted-type-bar { align-items: flex-start; flex-wrap: wrap; }
+html[data-platform="android"] .trusted-type-help { flex-basis: 100%; }
 html[data-platform="android"] .toolbar { gap: 8px; }
 html[data-platform="android"] .toolbar select { grid-column: auto; }
-html[data-platform="android"] .items { max-height: none; }
+html[data-platform="android"] .items,
+html[data-platform="android"] .split-list-shell .items { max-height: none; }
 html[data-platform="android"] .item { align-items: start; }
 html[data-platform="android"] .settings-lock-card { min-height: 0; grid-template-columns: 1fr; padding: 20px 16px; text-align: center; }
 html[data-platform="android"] .settings-lock-icon { margin: 0 auto; }
@@ -169,3 +195,6 @@ html[data-platform="android"] .sync-dialog-actions { display: grid; grid-templat
 html[data-platform="android"] .sync-dialog-actions button { min-height: 46px; }
 
 .sync-dialog select { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid #cfd7e6; border-radius: 10px; background: #fff; color: #172033; font: inherit; }
+
+html[data-platform="android"] .subpanel-heading { align-items: stretch; }
+html[data-platform="android"] .count-pill { align-self: start; }

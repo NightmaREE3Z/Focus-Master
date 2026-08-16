@@ -1,6 +1,7 @@
 import {
   isSupportedWebUrl,
-  normalizeSearchable
+  normalizeSearchable,
+  normalizeTldForStorage
 } from './shared.js';
 
 const GENERIC_SEARCH_KEYS = new Set([
@@ -149,6 +150,39 @@ function structuredLinkRuleMatches(candidate, rule) {
   return queryRuleMatches(candidate.url, rule.query);
 }
 
+
+function canonicalTldSuffix(value) {
+  const normalized = normalizeTldForStorage(value);
+  if (!normalized) return '';
+  const suffix = normalized.slice(1);
+  try {
+    const host = new URL(`https://focus-master.${suffix}/`).hostname
+      .toLocaleLowerCase('en-US')
+      .replace(/\.$/, '');
+    return host.startsWith('focus-master.') ? host.slice('focus-master.'.length) : suffix;
+  } catch {
+    return suffix;
+  }
+}
+
+export function matchTld(urlValue, tlds) {
+  if (!isSupportedWebUrl(urlValue)) return null;
+  let host = '';
+  try {
+    host = new URL(urlValue).hostname.toLocaleLowerCase('en-US').replace(/\.$/, '');
+  } catch {
+    return null;
+  }
+  if (!host) return null;
+
+  for (const stored of Array.isArray(tlds) ? tlds : []) {
+    const suffix = canonicalTldSuffix(stored);
+    if (!suffix) continue;
+    if (host === suffix || host.endsWith(`.${suffix}`)) return stored;
+  }
+  return null;
+}
+
 export function matchLink(urlValue, links) {
   if (!isSupportedWebUrl(urlValue)) return null;
   let candidate;
@@ -269,7 +303,16 @@ export function extractTermCandidates({ url, title = '' }) {
   }
 }
 
-function tokenMatches(candidate, token) {
+function tokenMatches(candidate, token, { strictShortToken = false } = {}) {
+  // Multi-part fallback rules stay fuzzy for useful longer fragments, but
+  // 1-2 character pieces must be real normalized tokens. Otherwise a rule
+  // such as `deep_n` can be Frankenstein-matched by `deep` + the `n` buried
+  // inside an unrelated word such as `again`. The normal phrase/substring
+  // pass runs first, so intended forms such as `deep_nude`, `deep-nude`,
+  // `AI Only` and `AI Online` still match exactly as before.
+  if (strictShortToken && token.length <= 2) {
+    return candidate.split(' ').includes(token);
+  }
   return candidate.includes(token);
 }
 
@@ -281,16 +324,41 @@ function termMatchesCandidate(candidateValue, storedTerm) {
   if (candidate.includes(term)) return true;
 
   const tokens = term.split(' ').filter(Boolean);
-  if (tokens.length > 1) return tokens.every(token => tokenMatches(candidate, token));
+  if (tokens.length > 1) {
+    return tokens.every(token => tokenMatches(candidate, token, { strictShortToken: true }));
+  }
   return tokens.length === 1 && tokenMatches(candidate, tokens[0]);
+}
+
+function exactHostnameLabels(urlValue) {
+  try {
+    const host = normalizeRuleHost(new URL(urlValue).hostname);
+    const labels = host.split('.').filter(Boolean);
+    // Never treat the public suffix/TLD as a blocked term candidate. This keeps
+    // a term such as `ai` from turning every .ai site into an implicit match.
+    if (labels.length > 1) labels.pop();
+    return labels.map(label => normalizeSearchable(label)).filter(Boolean);
+  } catch {
+    return [];
+  }
 }
 
 export function matchTerm({ url, title = '' }, terms) {
   if (!isSupportedWebUrl(url)) return null;
   const candidates = extractTermCandidates({ url, title });
-  if (!candidates.length) return null;
+  const hostLabels = exactHostnameLabels(url);
+  if (!candidates.length && !hostLabels.length) return null;
 
   for (const stored of terms) {
+    const normalizedTerm = normalizeSearchable(stored);
+
+    // Hostnames get intentionally strict matching: a blocked term may match an
+    // entire hostname label (including punctuation-normalized forms such as
+    // `ai-only` -> `ai only`), but fragments are never assembled from unrelated
+    // hostname/query pieces. This lets explicit entries such as AIOnly/OnlyAI
+    // catch aionly.com/onlyai.com without reviving microsoftONLINE + clAIms.
+    if (normalizedTerm && hostLabels.includes(normalizedTerm)) return stored;
+
     if (candidates.some(candidate => termMatchesCandidate(candidate, stored))) return stored;
   }
   return null;
@@ -299,6 +367,8 @@ export function matchTerm({ url, title = '' }, terms) {
 export function findBlockReason({ url, title = '' }, dataset, settings) {
   if (!settings.enabled || !isSupportedWebUrl(url)) return null;
   if (settings.blockLinks) {
+    const tld = matchTld(url, dataset.tlds);
+    if (tld) return { type: 'tld', trigger: tld, attemptedSearch: '' };
     const link = matchLink(url, dataset.links);
     if (link) return { type: 'link', trigger: link, attemptedSearch: extractAttemptedSearch(url) };
   }
