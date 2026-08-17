@@ -218,7 +218,7 @@ domain,taloon.com,
 domain,stark-suomi.fi,
 domain,byggmax.fi,
 domain,veikonkone.fi,
-domain,login.microsoftonline.com
+domain,login.microsoftonline.com,
 domain,tietokonekauppa.fi,
 domain,tector.fi,
 domain,fonum.fi,
@@ -328,4 +328,3 @@ path,microsoft.com,/en-us/software-download/windows11
 path,microsoft.com,/fi-fi/software-download/windows10
 path,microsoft.com,/en-gb/software-download/windows10
 path,microsoft.com,/en-us/software-download/windows10
-path,login.microsoftonline.com
