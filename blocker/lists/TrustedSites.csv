@@ -233,6 +233,33 @@ domain,mobiili.fi,
 domain,puhelinvertailu.com,
 domain,tekniikanmaailma.fi,
 domain,twitch.tv,
+domain,aws.jagex.com
+domain,oldschool6.runescape.com
+domain,auth.jagex.com
+domain,auth.runescape.com
+domain,www.runefest.com
+domain,runefest.com
+domain,runescapedragonwilds.help.jagex.com
+domain,zanaris.runescape.com
+domain,dragonwilds.runescape.com
+domain,support.runescape.com
+domain,play.runescape.com
+domain,secure.runescape.com
+domain,services.runescape.com
+domain,info.runescape.com
+domain,apps.runescape.com
+domain,account.runescape.com
+domain,osrs.runescape.com
+domain,rs.runescape.com
+domain,www.runescape.com
+domain,epform.pci.aws.jagex.com
+domain,payments.jagex.com
+domain,help.jagex.com
+domain,account.jagex.com
+domain,legal.jagex.com
+domain,cdn.jagex.com
+domain,www.jagex.com
+domain,jagex.com
 
 # PATHS
 path,github.com,/paintdotnet
