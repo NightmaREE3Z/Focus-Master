@@ -23,6 +23,8 @@ const state = {
   tlds: [],
   trustedSites: [],
   trustedSiteFilter: 'domain',
+  profile: 'haukkis',
+  timerProfile: 'haukkis',
   settings: {},
   storageStatus: {},
   githubSync: null,
@@ -130,6 +132,11 @@ function applyResponse(response) {
   if (Array.isArray(response.links)) state.links = response.links;
   if (Array.isArray(response.tlds)) state.tlds = response.tlds;
   if (Array.isArray(response.trustedSites)) state.trustedSites = response.trustedSites;
+  if (response.profile === 'haukkis' || response.profile === 'tapsa') {
+    const previousProfile = state.profile;
+    state.profile = response.profile;
+    if (!state.timerProfile || state.timerProfile === previousProfile) state.timerProfile = response.profile;
+  }
   if (response.settings && typeof response.settings === 'object') state.settings = response.settings;
   if (response.storageStatus && typeof response.storageStatus === 'object') state.storageStatus = response.storageStatus;
   if (response.githubSync && typeof response.githubSync === 'object') state.githubSync = response.githubSync;
@@ -193,6 +200,7 @@ function updateTrustedTypeFilterUi() {
 function renderCounts() {
   if (elements.termCount) elements.termCount.textContent = state.terms.length;
   if (elements.linkTldCount) elements.linkTldCount.textContent = state.links.length + state.tlds.length;
+  if (elements.dailyLimitCount) elements.dailyLimitCount.textContent = (Array.isArray(state.settings.scheduledRules) ? state.settings.scheduledRules.length : 0) + (Array.isArray(state.settings.quotaRules) ? state.settings.quotaRules.length : 0);
   if (elements.trustedSiteCount) elements.trustedSiteCount.textContent = state.trustedSites.length;
   if (elements.linkSectionCount) elements.linkSectionCount.textContent = state.links.length;
   if (elements.tldSectionCount) elements.tldSectionCount.textContent = state.tlds.length;
@@ -289,10 +297,12 @@ function selectView(view) {
   }
 
   const settings = view === 'settings';
+  const dailyLimits = view === 'dailyLimits';
   const split = view === 'links';
   const single = view === 'terms' || view === 'trustedSites';
   elements.singleListView.hidden = !single;
   elements.linksTldsView.hidden = !split;
+  elements.dailyLimitsView.hidden = !dailyLimits;
   elements.settingsView.hidden = !settings;
   if (elements.trustedTypeBar) elements.trustedTypeBar.hidden = view !== 'trustedSites';
 
@@ -305,6 +315,10 @@ function selectView(view) {
   } else if (view === 'links') {
     elements.viewTitle.textContent = 'Blocked links / TLDs';
     elements.viewSubtitle.textContent = 'Keep exact URL rules separate from hostname-suffix TLD rules.';
+  } else if (view === 'dailyLimits') {
+    elements.viewTitle.textContent = 'Daily Limits';
+    elements.viewSubtitle.textContent = 'Schedule blocks and limit daily focused-use time per Focus Master profile.';
+    void renderDailyLimitsState();
   } else if (view === 'trustedSites') {
     elements.viewTitle.textContent = 'Trusted sites';
     elements.viewSubtitle.textContent = 'Allow trusted domains or specific path trees before every blocking layer.';
@@ -341,6 +355,89 @@ function setAdminLockedUi() {
   elements.adminLocked.hidden = false;
   elements.adminPasswordInput.value = '';
   elements.adminError.textContent = '';
+}
+
+function setDailyLimitsLockedUi() {
+  state.adminUnlocked = false;
+  if (!elements.dailyLimitsControlsMount) return;
+  elements.dailyLimitsControlsMount.replaceChildren();
+  elements.dailyLimitsLocked.hidden = false;
+  elements.dailyLimitsPasswordInput.value = '';
+  elements.dailyLimitsError.textContent = '';
+}
+
+function setProtectedControlsLockedUi() {
+  setAdminLockedUi();
+  setDailyLimitsLockedUi();
+}
+
+function makeTimerRuleId(prefix) {
+  try { if (crypto?.randomUUID) return `${prefix}-${crypto.randomUUID().replace(/-/g, '')}`; } catch {}
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function timerRulesForProfile(kind) {
+  const source = kind === 'schedule' ? state.settings.scheduledRules : state.settings.quotaRules;
+  return (Array.isArray(source) ? source : []).filter(rule => rule?.profile === state.timerProfile);
+}
+
+function createTimerRuleRow(rule, kind) {
+  const row = document.createElement('div');
+  row.className = 'timer-rule';
+
+  const enabled = document.createElement('input');
+  enabled.type = 'checkbox';
+  enabled.checked = rule.enabled !== false;
+  enabled.disabled = !Boolean(state.settings.enabled);
+  enabled.title = 'Enable this timer rule';
+
+  const copy = document.createElement('div');
+  copy.className = 'timer-rule-copy';
+  const target = document.createElement('div');
+  target.className = 'timer-rule-target';
+  target.textContent = rule.link;
+  const detail = document.createElement('div');
+  detail.className = 'timer-rule-detail';
+  detail.textContent = kind === 'schedule'
+    ? `Blocked daily ${rule.startTime}–${rule.endTime}`
+    : `${rule.minutes} min/day · resets ${rule.resetTime}`;
+  copy.append(target, detail);
+
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'timer-rule-remove';
+  remove.textContent = 'Remove';
+  remove.disabled = !Boolean(state.settings.enabled);
+
+  enabled.addEventListener('change', async () => {
+    const key = kind === 'schedule' ? 'scheduledRules' : 'quotaRules';
+    const current = Array.isArray(state.settings[key]) ? state.settings[key] : [];
+    const next = current.map(item => item.id === rule.id ? { ...item, enabled: enabled.checked } : item);
+    await saveAdminSettings({ [key]: next }, 'Timer rule updated.');
+  });
+
+  remove.addEventListener('click', async () => {
+    const key = kind === 'schedule' ? 'scheduledRules' : 'quotaRules';
+    const current = Array.isArray(state.settings[key]) ? state.settings[key] : [];
+    const next = current.filter(item => item.id !== rule.id);
+    await saveAdminSettings({ [key]: next }, 'Timer rule removed.');
+  });
+
+  row.append(enabled, copy, remove);
+  return row;
+}
+
+function renderTimerRules() {
+  if (!elements.timerProfileSelect) return;
+  elements.timerProfileSelect.value = state.timerProfile || state.profile || 'haukkis';
+
+  const scheduled = timerRulesForProfile('schedule');
+  const quotas = timerRulesForProfile('quota');
+
+  elements.scheduleRulesList?.replaceChildren(...scheduled.map(rule => createTimerRuleRow(rule, 'schedule')));
+  elements.quotaRulesList?.replaceChildren(...quotas.map(rule => createTimerRuleRow(rule, 'quota')));
+  if (elements.scheduleEmptyState) elements.scheduleEmptyState.hidden = scheduled.length > 0;
+  if (elements.quotaEmptyState) elements.quotaEmptyState.hidden = quotas.length > 0;
 }
 
 function setAdminDependentState() {
@@ -388,15 +485,41 @@ async function renderAdminState() {
   setAdminDependentState();
 }
 
+function setDailyLimitsDependentState() {
+  const enabled = Boolean(state.settings.enabled);
+  elements.timeSettings?.classList.toggle('is-disabled', !enabled);
+  for (const control of [elements.timerProfileSelect, elements.scheduleLinkInput, elements.scheduleStartInput, elements.scheduleEndInput, elements.addScheduleButton, elements.quotaLinkInput, elements.quotaMinutesInput, elements.quotaResetInput, elements.addQuotaButton]) {
+    if (control) control.disabled = !enabled;
+  }
+  renderTimerRules();
+}
+
+async function renderDailyLimitsState() {
+  if (!elements.dailyLimitsControlsMount) return;
+  if (!state.adminUnlocked) {
+    setDailyLimitsLockedUi();
+    return;
+  }
+  if (!elements.dailyLimitsControlsMount.firstElementChild) {
+    const content = getTemplate('dailyLimitsUiTemplate').content.cloneNode(true);
+    elements.dailyLimitsControlsMount.replaceChildren(content);
+    bindDailyLimitsControls();
+  }
+  elements.dailyLimitsLocked.hidden = true;
+  setDailyLimitsDependentState();
+}
+
 async function saveAdminSettings(patch, successMessage = 'Settings saved.') {
   try {
     const response = await message({ type: MESSAGE.updateAdminSettings, patch }, { redirectOnLock: false });
     applyResponse(response);
     setAdminDependentState();
+    setDailyLimitsDependentState();
+    renderCounts();
     toast(successMessage);
     return true;
   } catch (error) {
-    if (/settings are locked/i.test(error.message)) setAdminLockedUi();
+    if (/settings are locked/i.test(error.message)) setProtectedControlsLockedUi();
     if (!lockingOut) toast(error.message);
     return false;
   }
@@ -627,6 +750,62 @@ function bindGithubSyncDialog() {
   elements.uploadToGithub.addEventListener('click', () => void runGithubAction(elements.uploadToGithub, 'upload'));
 }
 
+function bindDailyLimitsControls() {
+  Object.assign(elements, {
+    dailyLimitsControls: $('#dailyLimitsControls'), timeSettings: $('#timeSettings'), timerProfileSelect: $('#timerProfileSelect'),
+    scheduleLinkInput: $('#scheduleLinkInput'), scheduleStartInput: $('#scheduleStartInput'), scheduleEndInput: $('#scheduleEndInput'), addScheduleButton: $('#addScheduleButton'), scheduleRulesList: $('#scheduleRulesList'), scheduleEmptyState: $('#scheduleEmptyState'),
+    quotaLinkInput: $('#quotaLinkInput'), quotaMinutesInput: $('#quotaMinutesInput'), quotaResetInput: $('#quotaResetInput'), addQuotaButton: $('#addQuotaButton'), quotaRulesList: $('#quotaRulesList'), quotaEmptyState: $('#quotaEmptyState'),
+    lockDailyLimitsButton: $('#lockDailyLimitsButton')
+  });
+
+  elements.timerProfileSelect.addEventListener('change', () => {
+    state.timerProfile = elements.timerProfileSelect.value === 'tapsa' ? 'tapsa' : 'haukkis';
+    renderTimerRules();
+  });
+
+  elements.addScheduleButton.addEventListener('click', async () => {
+    const link = normalizeLinkForStorage(elements.scheduleLinkInput.value);
+    if (!link) return toast('Enter a valid site or URL rule first.');
+    const startTime = elements.scheduleStartInput.value || '23:00';
+    const endTime = elements.scheduleEndInput.value || '10:00';
+    const current = Array.isArray(state.settings.scheduledRules) ? state.settings.scheduledRules : [];
+    const next = [...current, {
+      id: makeTimerRuleId('schedule'), profile: state.timerProfile, link, startTime, endTime, enabled: true
+    }];
+    if (await saveAdminSettings({ scheduledRules: next }, 'Scheduled block added.')) {
+      elements.scheduleLinkInput.value = '';
+    }
+  });
+  elements.scheduleLinkInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') { event.preventDefault(); elements.addScheduleButton.click(); }
+  });
+
+  elements.addQuotaButton.addEventListener('click', async () => {
+    const link = normalizeLinkForStorage(elements.quotaLinkInput.value);
+    if (!link) return toast('Enter a valid site or URL rule first.');
+    const minutes = Math.min(1440, Math.max(1, Math.round(Number(elements.quotaMinutesInput.value) || 1)));
+    const resetTime = elements.quotaResetInput.value || '10:00';
+    const current = Array.isArray(state.settings.quotaRules) ? state.settings.quotaRules : [];
+    const next = [...current, {
+      id: makeTimerRuleId('quota'), profile: state.timerProfile, link, minutes, resetTime, enabled: true
+    }];
+    if (await saveAdminSettings({ quotaRules: next }, 'Daily limit added.')) {
+      elements.quotaLinkInput.value = '';
+    }
+  });
+  elements.quotaLinkInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') { event.preventDefault(); elements.addQuotaButton.click(); }
+  });
+
+  elements.lockDailyLimitsButton.addEventListener('click', async () => {
+    try {
+      await message({ type: MESSAGE.adminLock }, { redirectOnLock: false });
+      setProtectedControlsLockedUi();
+      toast('Protected controls locked.');
+    } catch (error) { toast(error.message); }
+  });
+}
+
 function bindAdminControls() {
   Object.assign(elements, {
     adminControls: $('#adminControls'), enabledToggle: $('#enabledToggle'), adminEnabledOptions: $('#adminEnabledOptions'),
@@ -731,8 +910,8 @@ function bindAdminControls() {
   elements.lockAdminButton.addEventListener('click', async () => {
     try {
       await message({ type: MESSAGE.adminLock }, { redirectOnLock: false });
-      setAdminLockedUi();
-      toast('Settings locked.');
+      setProtectedControlsLockedUi();
+      toast('Protected controls locked.');
     } catch (error) { toast(error.message); }
   });
 
@@ -777,9 +956,9 @@ function bindListEditor({ kind, addInput, addButton, searchInput, importMode, im
 
 function bind() {
   Object.assign(elements, {
-    app: $('#app'), termCount: $('#termCount'), linkTldCount: $('#linkTldCount'), trustedSiteCount: $('#trustedSiteCount'),
+    app: $('#app'), termCount: $('#termCount'), linkTldCount: $('#linkTldCount'), dailyLimitCount: $('#dailyLimitCount'), trustedSiteCount: $('#trustedSiteCount'),
     linkSectionCount: $('#linkSectionCount'), tldSectionCount: $('#tldSectionCount'),
-    viewTitle: $('#viewTitle'), viewSubtitle: $('#viewSubtitle'), singleListView: $('#singleListView'), linksTldsView: $('#linksTldsView'), settingsView: $('#settingsView'),
+    viewTitle: $('#viewTitle'), viewSubtitle: $('#viewSubtitle'), singleListView: $('#singleListView'), linksTldsView: $('#linksTldsView'), dailyLimitsView: $('#dailyLimitsView'), settingsView: $('#settingsView'),
     trustedTypeBar: $('#trustedTypeBar'), trustedTypeFilter: $('#trustedTypeFilter'),
     addInput: $('#addInput'), addButton: $('#addButton'), searchInput: $('#searchInput'), importMode: $('#importMode'),
     importButton: $('#importButton'), exportButton: $('#exportButton'), fileInput: $('#fileInput'), items: $('#items'), emptyState: $('#emptyState'), singleListOrderNote: $('#singleListOrderNote'),
@@ -787,6 +966,8 @@ function bind() {
     linkImportButton: $('#linkImportButton'), linkExportButton: $('#linkExportButton'), linkFileInput: $('#linkFileInput'), linkItems: $('#linkItems'), linkEmptyState: $('#linkEmptyState'),
     addTldInput: $('#addTldInput'), addTldButton: $('#addTldButton'), tldSearchInput: $('#tldSearchInput'), tldImportMode: $('#tldImportMode'),
     tldImportButton: $('#tldImportButton'), tldExportButton: $('#tldExportButton'), tldFileInput: $('#tldFileInput'), tldItems: $('#tldItems'), tldEmptyState: $('#tldEmptyState'),
+    dailyLimitsLocked: $('#dailyLimitsLocked'), dailyLimitsUnlockForm: $('#dailyLimitsUnlockForm'), dailyLimitsPasswordInput: $('#dailyLimitsPasswordInput'),
+    dailyLimitsUnlockButton: $('#dailyLimitsUnlockButton'), dailyLimitsError: $('#dailyLimitsError'), dailyLimitsControlsMount: $('#dailyLimitsControlsMount'),
     adminLocked: $('#adminLocked'), adminUnlockForm: $('#adminUnlockForm'), adminPasswordInput: $('#adminPasswordInput'),
     adminUnlockButton: $('#adminUnlockButton'), adminError: $('#adminError'), adminControlsMount: $('#adminControlsMount'),
     lockButton: $('#lockButton'), toast: $('#toast'), syncLabel: $('#syncLabel'), syncDialog: $('#syncDialog'),
@@ -855,6 +1036,27 @@ function bind() {
     importButton: elements.tldImportButton, exportButton: elements.tldExportButton, fileInput: elements.tldFileInput
   });
 
+  elements.dailyLimitsUnlockForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    elements.dailyLimitsError.textContent = '';
+    elements.dailyLimitsUnlockButton.disabled = true;
+    elements.dailyLimitsPasswordInput.disabled = true;
+    try {
+      const response = await message({ type: MESSAGE.adminUnlock, password: elements.dailyLimitsPasswordInput.value });
+      if (!response.adminUnlocked) throw new Error('Incorrect password.');
+      applyResponse(response);
+      await renderDailyLimitsState();
+      toast('Daily Limits unlocked for five minutes.');
+    } catch (error) {
+      elements.dailyLimitsError.textContent = error.message;
+      elements.dailyLimitsPasswordInput.select();
+    } finally {
+      elements.dailyLimitsUnlockButton.disabled = false;
+      elements.dailyLimitsPasswordInput.disabled = false;
+      elements.dailyLimitsPasswordInput.focus();
+    }
+  });
+
   elements.adminUnlockForm.addEventListener('submit', async event => {
     event.preventDefault();
     elements.adminError.textContent = '';
@@ -897,6 +1099,7 @@ async function checkAccess() {
     if (state.adminUnlocked !== Boolean(response.adminUnlocked)) {
       state.adminUnlocked = Boolean(response.adminUnlocked);
       if (state.view === 'settings') await renderAdminState();
+      if (state.view === 'dailyLimits') await renderDailyLimitsState();
     }
   } catch {
     secureLockout(true);
@@ -928,8 +1131,13 @@ async function start() {
   applyResponse(response);
   renderCounts();
   renderCurrentView();
-  if (state.adminUnlocked) await renderAdminState();
-  else setAdminLockedUi();
+  if (state.adminUnlocked) {
+    if (state.view === 'settings') await renderAdminState();
+    if (state.view === 'dailyLimits') await renderDailyLimitsState();
+  } else {
+    setAdminLockedUi();
+    setDailyLimitsLockedUi();
+  }
   startAccessWatcher();
 }
 

@@ -164,3 +164,761 @@ body { margin: 0; overflow: hidden; }
   .blocked-card { top: 56vh; }
   .close-row { top: calc(56vh + 105px); }
 }
+
+
+/* Minimal scheduled / daily-limit pages — 2026-08-21 */
+body.simple-time-block .blocked-page {
+  background-color: #0b4b63;
+  background-position: center;
+  background-size: cover;
+}
+
+/* Scheduled block: one centered vertical unit with a real-time analog clock. */
+body.schedule-block .blocked-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: clamp(28px, 3.2vh, 44px);
+  min-height: 100vh;
+  padding: clamp(34px, 6.2vh, 66px) 24px clamp(24px, 4vh, 44px);
+  background: #0b4b63;
+}
+
+body.schedule-block .blocked-copy {
+  position: static;
+  z-index: 3;
+  transform: none;
+  width: min(1080px, calc(100vw - 48px));
+  margin: 0;
+  text-align: center;
+  text-shadow: 0 3px 18px rgba(0, 0, 0, .18);
+}
+
+body.schedule-block .blocked-copy h1 {
+  max-width: none;
+  margin: 0;
+  font-size: clamp(42px, 4.15vw, 70px);
+  line-height: 1;
+  font-weight: 900;
+  letter-spacing: -.045em;
+}
+
+body.schedule-block .schedule-clock {
+  --clock-stroke: rgba(107, 162, 183, .34);
+  --clock-stroke-strong: rgba(136, 190, 209, .50);
+  --clock-number: rgba(186, 218, 228, .62);
+  position: relative;
+  z-index: 2;
+  display: block;
+  flex: 0 0 auto;
+  width: min(31vw, 49vh, 500px);
+  aspect-ratio: 1;
+  margin: clamp(6px, 1.1vh, 12px) 0 0;
+  border: clamp(9px, .72vw, 13px) solid var(--clock-stroke);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at center, rgba(255, 255, 255, .018) 0 3%, transparent 3.2%),
+    transparent;
+  box-shadow:
+    inset 0 0 0 clamp(3px, .22vw, 5px) rgba(107, 162, 183, .22),
+    0 14px 46px rgba(0, 0, 0, .08);
+}
+
+body.schedule-block .schedule-clock[hidden] { display: none; }
+
+/* Keep the older inner ring, but make it subtle behind the functional face. */
+body.schedule-block .clock-ring {
+  position: absolute;
+  inset: 7.2%;
+  border: clamp(3px, .22vw, 5px) solid rgba(107, 162, 183, .22);
+  border-radius: 50%;
+}
+
+/* Legacy decorative marks are no longer needed once the proper 60-tick face exists. */
+body.schedule-block .clock-mark {
+  display: none;
+}
+
+/* Each orbit fills the face; its ::before draws one tick at the top. */
+body.schedule-block .clock-tick-orbit {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+body.schedule-block .clock-tick-orbit::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 4.2%;
+  width: clamp(2px, .14vw, 3px);
+  height: clamp(7px, .62vw, 11px);
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(136, 190, 209, .34);
+}
+
+body.schedule-block .clock-tick-major::before {
+  top: 3.7%;
+  width: clamp(3px, .20vw, 4px);
+  height: clamp(14px, 1.05vw, 19px);
+  background: var(--clock-stroke-strong);
+}
+
+/* Number orbit rotates around the clock; label counter-rotates so 1–12 stay upright. */
+body.schedule-block .clock-number-orbit {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+body.schedule-block .clock-number {
+  position: absolute;
+  left: 50%;
+  top: 10.2%;
+  min-width: 1.6em;
+  color: var(--clock-number);
+  font-size: clamp(18px, 1.55vw, 28px);
+  line-height: 1;
+  font-weight: 850;
+  text-align: center;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, .10);
+}
+
+body.schedule-block .clock-hand {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: block;
+  border-radius: 999px;
+  transform-origin: 50% 100%;
+  will-change: transform;
+  pointer-events: none;
+}
+
+body.schedule-block .clock-hour {
+  z-index: 5;
+  width: clamp(9px, .66vw, 13px);
+  height: 25%;
+  margin-left: calc(clamp(9px, .66vw, 13px) / -2);
+  margin-top: -25%;
+  background: rgba(119, 174, 194, .56);
+}
+
+body.schedule-block .clock-minute {
+  z-index: 6;
+  width: clamp(7px, .50vw, 10px);
+  height: 35%;
+  margin-left: calc(clamp(7px, .50vw, 10px) / -2);
+  margin-top: -35%;
+  background: rgba(119, 174, 194, .62);
+}
+
+body.schedule-block .clock-second {
+  z-index: 7;
+  width: clamp(2px, .16vw, 3px);
+  height: 39%;
+  margin-left: calc(clamp(2px, .16vw, 3px) / -2);
+  margin-top: -39%;
+  background: rgba(190, 224, 234, .72);
+}
+
+body.schedule-block .clock-second::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -18%;
+  width: 100%;
+  height: 24%;
+  transform: translateX(-50%);
+  border-radius: inherit;
+  background: inherit;
+}
+
+body.schedule-block .clock-center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 8;
+  width: clamp(22px, 1.8vw, 32px);
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border: clamp(4px, .28vw, 5px) solid rgba(112, 168, 189, .72);
+  border-radius: 50%;
+  background: #0b4b63;
+  box-shadow: 0 0 0 clamp(3px, .22vw, 4px) rgba(153, 202, 218, .20);
+}
+
+body.schedule-block .close-row {
+  position: static;
+  z-index: 3;
+  display: flex;
+  flex: 0 0 auto;
+  align-self: center;
+  justify-content: center;
+  width: auto;
+  margin: clamp(6px, .8vh, 12px) 0 0;
+}
+
+body.schedule-block #closeButton {
+  min-width: 146px;
+  min-height: 62px;
+  padding: 0 25px;
+  border-radius: 15px;
+  font-size: clamp(18px, 1.35vw, 24px);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .18);
+}
+
+@media (max-width: 900px) {
+  body.quota-block .blocked-copy {
+    left: 24px;
+    width: calc(100vw - 48px);
+  }
+  body.quota-block .close-row {
+    left: 24px;
+    top: calc(50% + 82px);
+  }
+}
+
+@media (max-height: 700px) {
+  body.quota-block .blocked-copy {
+    top: 44%;
+  }
+  body.quota-block .close-row {
+    top: calc(44% + 78px);
+  }
+}
+
+
+
+/* ------------------------------------------------------------
+   Quota page refresh (v1.2.0 dev, 2026-08-21)
+   Centered text + "time ran out" expired-hourglass visual.
+   This is quota-only; schedule page remains the live clock page.
+------------------------------------------------------------- */
+
+#quotaVisual[hidden] {
+  display: none !important;
+}
+
+body.quota-block .blocked-page {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: clamp(20px, 2.8vh, 34px) !important;
+  min-height: 100vh !important;
+  padding: clamp(34px, 6vh, 68px) 24px clamp(24px, 4vh, 42px) !important;
+  overflow: hidden !important;
+  background:
+    radial-gradient(circle at 50% 24%, rgba(255,255,255,.055), transparent 24%),
+    linear-gradient(180deg, #0b4b63 0%, #0a4760 100%) !important;
+}
+
+body.quota-block .blocked-copy {
+  position: static !important;
+  left: auto !important;
+  top: auto !important;
+  z-index: 3 !important;
+  transform: none !important;
+  width: min(1120px, calc(100vw - 48px)) !important;
+  margin: 0 !important;
+  text-align: center !important;
+  text-shadow: 0 3px 18px rgba(0, 0, 0, .18) !important;
+}
+
+body.quota-block .blocked-copy h1 {
+  max-width: min(980px, 92vw) !important;
+  margin: 0 auto !important;
+  font-size: clamp(40px, 4.15vw, 70px) !important;
+  line-height: .98 !important;
+  font-weight: 900 !important;
+  letter-spacing: -.045em !important;
+}
+
+body.quota-block .blocked-copy p {
+  display: none !important;
+}
+
+body.quota-block .blocked-card,
+body.quota-block .schedule-clock {
+  display: none !important;
+}
+
+body.quota-block .quota-visual {
+  position: relative !important;
+  z-index: 2 !important;
+  display: block !important;
+  flex: 0 0 auto !important;
+  width: min(31vw, 48vh, 440px) !important;
+  aspect-ratio: 1 !important;
+  margin: clamp(4px, .8vh, 10px) 0 0 !important;
+  pointer-events: none !important;
+}
+
+body.quota-block .quota-expired-halo,
+body.quota-block .quota-expired-ring,
+body.quota-block .quota-expired-ring-inner,
+body.quota-block .quota-expired-hourglass,
+body.quota-block .quota-expired-sand,
+body.quota-block .quota-expired-mark {
+  position: absolute !important;
+  display: block !important;
+}
+
+body.quota-block .quota-expired-halo {
+  inset: 7% !important;
+  border-radius: 50% !important;
+  background: radial-gradient(circle, rgba(255,255,255,.06) 0%, rgba(255,255,255,.015) 44%, transparent 65%) !important;
+  filter: blur(2px) !important;
+}
+
+body.quota-block .quota-expired-ring {
+  inset: 5% !important;
+  border: clamp(8px, .62vw, 12px) solid rgba(100, 157, 180, .34) !important;
+  border-radius: 50% !important;
+  box-shadow:
+    inset 0 0 0 clamp(2px, .16vw, 4px) rgba(130, 185, 204, .16),
+    0 16px 44px rgba(0, 0, 0, .10) !important;
+}
+
+body.quota-block .quota-expired-ring-inner {
+  inset: 14% !important;
+  border-width: clamp(3px, .22vw, 5px) !important;
+  border-color: rgba(130, 185, 204, .20) !important;
+}
+
+body.quota-block .quota-expired-hourglass {
+  left: 50% !important;
+  width: 0 !important;
+  transform: translateX(-50%);
+  border-left: clamp(60px, 5vw, 82px) solid transparent !important;
+  border-right: clamp(60px, 5vw, 82px) solid transparent !important;
+}
+
+body.quota-block .quota-hourglass-top {
+  top: 23% !important;
+  border-bottom: clamp(96px, 7.2vw, 140px) solid rgba(117, 177, 197, .30) !important;
+}
+
+body.quota-block .quota-hourglass-bottom {
+  bottom: 22% !important;
+  border-top: clamp(96px, 7.2vw, 140px) solid rgba(117, 177, 197, .30) !important;
+}
+
+body.quota-block .quota-hourglass-neck {
+  top: 50% !important;
+  width: clamp(18px, 1.35vw, 24px) !important;
+  height: clamp(22px, 1.6vw, 30px) !important;
+  transform: translate(-50%, -50%);
+  border-radius: 999px !important;
+  background: rgba(144, 201, 218, .38) !important;
+}
+
+body.quota-block .quota-expired-sand {
+  left: 50% !important;
+  transform: translateX(-50%);
+  border-radius: 999px !important;
+  background: rgba(228, 239, 183, .62) !important;
+  box-shadow: 0 0 18px rgba(228, 239, 183, .12) !important;
+}
+
+body.quota-block .quota-expired-sand-top {
+  top: 31% !important;
+  width: clamp(88px, 6vw, 118px) !important;
+  height: clamp(26px, 2vw, 38px) !important;
+  clip-path: polygon(0 0, 100% 0, 74% 100%, 26% 100%) !important;
+  opacity: .40;
+}
+
+body.quota-block .quota-expired-sand-fall {
+  top: calc(50% - clamp(5px, .35vw, 6px)) !important;
+  width: clamp(4px, .28vw, 6px) !important;
+  height: clamp(22px, 2vw, 34px);
+  transform: translateX(-50%);
+  opacity: .82;
+}
+
+body.quota-block .quota-expired-sand-bottom {
+  bottom: 31% !important;
+  width: clamp(110px, 7vw, 140px) !important;
+  height: clamp(34px, 2.5vw, 48px) !important;
+  clip-path: polygon(24% 0, 76% 0, 100% 100%, 0 100%) !important;
+  opacity: .84;
+}
+
+body.quota-block .quota-expired-mark {
+  background: rgba(160, 208, 222, .34) !important;
+  border-radius: 999px !important;
+}
+
+body.quota-block .quota-expired-mark-top,
+body.quota-block .quota-expired-mark-bottom {
+  left: 50% !important;
+  width: clamp(7px, .5vw, 9px) !important;
+  height: clamp(24px, 1.9vw, 34px) !important;
+  transform: translateX(-50%) !important;
+}
+
+body.quota-block .quota-expired-mark-top { top: 9% !important; }
+body.quota-block .quota-expired-mark-bottom { bottom: 9% !important; }
+
+body.quota-block .quota-expired-mark-left,
+body.quota-block .quota-expired-mark-right {
+  top: 50% !important;
+  width: clamp(24px, 1.9vw, 34px) !important;
+  height: clamp(7px, .5vw, 9px) !important;
+  transform: translateY(-50%) !important;
+}
+
+body.quota-block .quota-expired-mark-left { left: 9% !important; }
+body.quota-block .quota-expired-mark-right { right: 9% !important; }
+
+body.quota-block .close-row {
+  position: static !important;
+  left: auto !important;
+  top: auto !important;
+  z-index: 3 !important;
+  display: flex !important;
+  flex: 0 0 auto !important;
+  align-self: center !important;
+  justify-content: center !important;
+  width: auto !important;
+  margin: clamp(6px, .7vh, 12px) 0 0 !important;
+}
+
+body.quota-block #closeButton {
+  min-width: 146px !important;
+  min-height: 62px !important;
+  padding: 0 25px !important;
+  border-radius: 15px !important;
+  font-size: clamp(18px, 1.35vw, 24px) !important;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .18) !important;
+}
+
+@media (max-width: 900px) {
+  body.quota-block .blocked-page {
+    gap: 22px !important;
+    padding-inline: 18px !important;
+  }
+
+  body.quota-block .blocked-copy {
+    width: calc(100vw - 36px) !important;
+  }
+
+  body.quota-block .quota-visual {
+    width: min(70vw, 46vh, 400px) !important;
+  }
+}
+
+@media (max-height: 700px) {
+  body.quota-block .blocked-page {
+    gap: 16px !important;
+    padding-block: 18px 16px !important;
+  }
+
+  body.quota-block .blocked-copy h1 {
+    font-size: clamp(32px, 5.6vh, 46px) !important;
+  }
+
+  body.quota-block .quota-visual {
+    width: min(30vw, 47vh, 320px) !important;
+  }
+
+  body.quota-block #closeButton {
+    min-height: 48px !important;
+  }
+}
+
+
+/* ------------------------------------------------------------
+   Animated quota hourglass polish (v1.2.0 dev, 2026-08-21)
+   Adds subtle motion to the "time ran out" hourglass without
+   disturbing the centered layout.
+------------------------------------------------------------- */
+
+body.quota-block .quota-visual {
+  animation: quota-visual-float 4.4s ease-in-out infinite;
+  transform-origin: 50% 50%;
+}
+
+body.quota-block .quota-expired-ring {
+  animation: quota-ring-breathe 4.4s ease-in-out infinite;
+}
+
+body.quota-block .quota-expired-ring-inner {
+  animation: quota-ring-breathe-inner 4.4s ease-in-out infinite;
+}
+
+body.quota-block .quota-expired-halo {
+  animation: quota-halo-breathe 4.4s ease-in-out infinite;
+}
+
+body.quota-block .quota-hourglass-top {
+  animation: quota-hourglass-top 3.6s ease-in-out infinite;
+  transform-origin: 50% 100%;
+}
+
+body.quota-block .quota-hourglass-bottom {
+  animation: quota-hourglass-bottom 3.6s ease-in-out infinite;
+  transform-origin: 50% 0%;
+}
+
+body.quota-block .quota-hourglass-neck {
+  animation: quota-neck-glow 1.8s ease-in-out infinite;
+}
+
+body.quota-block .quota-expired-sand-top {
+  animation: quota-sand-top 3.6s linear infinite;
+  transform-origin: 50% 100%;
+}
+
+body.quota-block .quota-expired-sand-fall {
+  animation: quota-sand-fall 1.2s linear infinite;
+}
+
+body.quota-block .quota-expired-sand-bottom {
+  animation: quota-sand-bottom 3.6s linear infinite;
+  transform-origin: 50% 100%;
+}
+
+body.quota-block .quota-expired-mark-top,
+body.quota-block .quota-expired-mark-bottom,
+body.quota-block .quota-expired-mark-left,
+body.quota-block .quota-expired-mark-right {
+  animation: quota-marker-breathe 4.4s ease-in-out infinite;
+}
+
+@keyframes quota-visual-float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(4px);
+  }
+}
+
+@keyframes quota-ring-breathe {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.013);
+    opacity: .92;
+  }
+}
+
+@keyframes quota-ring-breathe-inner {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(.992);
+    opacity: .88;
+  }
+}
+
+@keyframes quota-halo-breathe {
+  0%, 100% {
+    transform: scale(1);
+    opacity: .95;
+  }
+  50% {
+    transform: scale(1.03);
+    opacity: .8;
+  }
+}
+
+@keyframes quota-hourglass-top {
+  0%, 100% {
+    opacity: 1;
+    transform: translateX(-50%) scaleY(1);
+  }
+  50% {
+    opacity: .92;
+    transform: translateX(-50%) scaleY(.975);
+  }
+}
+
+@keyframes quota-hourglass-bottom {
+  0%, 100% {
+    opacity: 1;
+    transform: translateX(-50%) scaleY(1);
+  }
+  50% {
+    opacity: .96;
+    transform: translateX(-50%) scaleY(1.025);
+  }
+}
+
+@keyframes quota-neck-glow {
+  0%, 100% {
+    opacity: .85;
+    transform: translate(-50%, -50%) scaleY(1);
+  }
+  50% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scaleY(1.08);
+  }
+}
+
+@keyframes quota-sand-top {
+  0% {
+    opacity: .46;
+    transform: translateX(-50%) scale(1, 1);
+  }
+  40% {
+    opacity: .38;
+    transform: translateX(-50%) scale(.92, .82);
+  }
+  75% {
+    opacity: .28;
+    transform: translateX(-50%) scale(.82, .56);
+  }
+  100% {
+    opacity: .22;
+    transform: translateX(-50%) scale(.76, .42);
+  }
+}
+
+@keyframes quota-sand-fall {
+  0% {
+    opacity: .12;
+    height: clamp(12px, 1.1vw, 18px);
+    transform: translateX(-50%) scaleY(.55);
+  }
+  16% {
+    opacity: .9;
+    height: clamp(20px, 1.8vw, 30px);
+    transform: translateX(-50%) scaleY(1);
+  }
+  58% {
+    opacity: .82;
+    height: clamp(28px, 2.1vw, 38px);
+    transform: translateX(-50%) scaleY(1.08);
+  }
+  100% {
+    opacity: .12;
+    height: clamp(12px, 1.1vw, 18px);
+    transform: translateX(-50%) scaleY(.52);
+  }
+}
+
+@keyframes quota-sand-bottom {
+  0% {
+    opacity: .68;
+    transform: translateX(-50%) scale(.76, .58);
+  }
+  38% {
+    opacity: .78;
+    transform: translateX(-50%) scale(.88, .78);
+  }
+  72% {
+    opacity: .86;
+    transform: translateX(-50%) scale(.96, .92);
+  }
+  100% {
+    opacity: .92;
+    transform: translateX(-50%) scale(1, 1);
+  }
+}
+
+@keyframes quota-marker-breathe {
+  0%, 100% {
+    opacity: .8;
+  }
+  50% {
+    opacity: .52;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.quota-block .quota-visual,
+  body.quota-block .quota-expired-ring,
+  body.quota-block .quota-expired-ring-inner,
+  body.quota-block .quota-expired-halo,
+  body.quota-block .quota-hourglass-top,
+  body.quota-block .quota-hourglass-bottom,
+  body.quota-block .quota-hourglass-neck,
+  body.quota-block .quota-expired-sand-top,
+  body.quota-block .quota-expired-sand-fall,
+  body.quota-block .quota-expired-sand-bottom,
+  body.quota-block .quota-expired-mark-top,
+  body.quota-block .quota-expired-mark-bottom,
+  body.quota-block .quota-expired-mark-left,
+  body.quota-block .quota-expired-mark-right {
+    animation: none !important;
+  }
+}
+
+
+/* ------------------------------------------------------------
+   Quota heading split lines (v1.2.0 dev, 2026-08-21)
+   Makes the quota heading two centered sentence lines.
+------------------------------------------------------------- */
+
+body.quota-block .blocked-copy h1 {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 0 !important;
+}
+
+body.quota-block .quota-heading-line {
+  display: block !important;
+  width: 100% !important;
+  text-align: center !important;
+}
+
+body.quota-block .quota-heading-line + .quota-heading-line {
+  margin-top: -.05em !important;
+}
+
+
+/* Actual falling-grain stream fix — 2026-08-21.
+   The earlier keyframes were blocked by !important static properties. */
+body.quota-block .quota-expired-sand-fall {
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(236, 244, 195, .98) 0 4px,
+      rgba(236, 244, 195, .38) 4px 7px,
+      transparent 7px 11px
+    ) !important;
+  background-size: 100% 22px !important;
+  box-shadow: 0 0 10px rgba(228, 239, 183, .18) !important;
+  animation:
+    quota-sand-fall 1.2s ease-in-out infinite,
+    quota-sand-grains .42s linear infinite !important;
+}
+
+@keyframes quota-sand-grains {
+  from { background-position: 0 -22px; }
+  to   { background-position: 0 22px; }
+}
+
+/* Keep the sand-transfer cycle synchronized so the top visibly empties while
+   the bottom visibly fills, then the animation restarts. */
+body.quota-block .quota-expired-sand-top {
+  animation: quota-sand-top 3.6s linear infinite !important;
+}
+
+body.quota-block .quota-expired-sand-bottom {
+  animation: quota-sand-bottom 3.6s linear infinite !important;
+}
+
+body.quota-block .quota-hourglass-top {
+  animation: quota-hourglass-top 3.6s ease-in-out infinite !important;
+}
+
+body.quota-block .quota-hourglass-bottom {
+  animation: quota-hourglass-bottom 3.6s ease-in-out infinite !important;
+}
+
+body.quota-block .quota-hourglass-neck {
+  animation: quota-neck-glow 1.8s ease-in-out infinite !important;
+}

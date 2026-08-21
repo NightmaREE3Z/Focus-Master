@@ -15,6 +15,10 @@ import {
   verifyPassword
 } from './auth.js';
 import { findBlockReason, hasScopedLinkRulesForUrl } from './matcher.js';
+import { HARD_CODED_LINKS } from './hardcoded-blocks.js';
+import { findTimeRuleBlock, initializeTimeRuleTracking, sampleTimeRuleUsageNow } from './timers.js';
+import { expandWrappedWebUrls, extractWrappedTargetUrls, isUnsupportedArchiveUrl } from './url-wrappers.js';
+import { refreshTimeRulePrepaintRegistration } from './time-rule-prepaint-registration.js';
 import { findBlockedHost, initializeHosts } from './hosts.js';
 import {
   downloadGitHubLists,
@@ -49,6 +53,20 @@ const recentlyRedirected = new Map();
 const redirectInFlight = new Set();
 const redirectLandingBypass = new Map();
 const EXTENSION_ORIGIN = new URL(browser.runtime.getURL('/')).origin;
+const HARD_CODED_LINK_RULES = uniqueInOrder(HARD_CODED_LINKS, normalizeLinkForStorage);
+
+
+// The master Enabled toggle is intentionally a normal-window control only.
+// Focus Master uses manifest "incognito": "split", so the Incognito service
+// worker has its own execution context even though extension storage is shared.
+// In that Incognito context, the master blocker is always treated as enabled.
+function getEffectiveEnforcementSettings(settings) {
+  if (!chrome.extension?.inIncognitoContext) return settings;
+  return {
+    ...settings,
+    enabled: true
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Native redirect logging
@@ -158,14 +176,22 @@ async function sendNativeBlockLog(reason, sourceUrl, redirectTarget = '') {
       ? 'Focus Master blocked-link matcher'
       : reasonType === 'tld'
         ? 'Focus Master blocked-TLD matcher'
-        : 'Focus Master blocked-term matcher';
+        : reasonType === 'schedule'
+          ? 'Focus Master scheduled block'
+          : reasonType === 'quota'
+            ? 'Focus Master daily time limit'
+            : 'Focus Master blocked-term matcher';
   const context = reasonType === 'host'
     ? 'fetched-host'
     : reasonType === 'link'
       ? 'blocked-link'
       : reasonType === 'tld'
         ? 'blocked-tld'
-        : 'blocked-term';
+        : reasonType === 'schedule'
+          ? 'scheduled-block'
+          : reasonType === 'quota'
+            ? 'daily-limit'
+            : 'blocked-term';
   const payload = {
     type: 'BRAVEFOX_REDIRECT_LOG',
     source: NATIVE_LOG_SOURCE,
@@ -255,7 +281,7 @@ function logLoadedBlocklists(dataset) {
   const trustedCount = Array.isArray(dataset?.trustedSites) ? dataset.trustedSites.length : 0;
   console.log(
     `[${consoleClockTime()}] Focus Master lists loaded: ${termsFile} (${termCount} terms), ` +
-    `blockedLinks.csv (${linkCount} links), blockedTLDs.csv (${tldCount} TLDs), ` +
+    `blockedLinks.csv (${linkCount} links + ${HARD_CODED_LINK_RULES.length} immutable), blockedTLDs.csv (${tldCount} TLDs), ` +
     `TrustedSites.csv (${trustedCount} trusted rules) — profile ${profileLabel}`
   );
 }
@@ -304,6 +330,7 @@ async function fullState(sender) {
     links: dataset.links,
     tlds: dataset.tlds,
     trustedSites: dataset.trustedSites,
+    profile: dataset.profile,
     settings,
     adminUnlocked: await isAdminTabUnlocked(tabId),
     storageStatus: publicStorageStatus(dataset),
@@ -316,7 +343,8 @@ function sanitizeAdminPatch(patch) {
   const output = {};
   for (const key of [
     'enabled', 'blockTerms', 'blockLinks', 'unlockTtlMinutes',
-    'redirectTerms', 'redirectTermsUrl', 'redirectLinks', 'redirectLinksUrl'
+    'redirectTerms', 'redirectTermsUrl', 'redirectLinks', 'redirectLinksUrl',
+    'scheduledRules', 'quotaRules'
   ]) {
     if (Object.prototype.hasOwnProperty.call(source, key)) output[key] = source[key];
   }
@@ -371,6 +399,7 @@ async function mutateDataset(kind, operation, payload) {
     links: saved.links,
     tlds: saved.tlds,
     trustedSites: saved.trustedSites,
+    profile: saved.profile,
     storageStatus: publicStorageStatus(saved),
     githubSync: await getGitHubSyncStatus()
   };
@@ -411,7 +440,42 @@ function blockedPageUrl(reason, sourceUrl) {
     source: sourceUrl,
     attempted: reason.attemptedSearch || ''
   });
+  if (reason?.type === 'schedule' && reason?.rule?.endTime) {
+    params.set('until', reason.rule.endTime);
+  }
   return browser.runtime.getURL(`blocker/blocked.html?${params.toString()}`);
+}
+
+async function prepaintTimeRuleCheck(message, sender) {
+  const tabId = sender?.tab?.id;
+  const url = String(message?.url || '').trim();
+  if (!Number.isInteger(tabId) || tabId < 0 || !isSupportedWebUrl(url)) {
+    return { ok: true, blocked: false };
+  }
+
+  const [dataset, storedSettings] = await Promise.all([
+    loadDataset(),
+    getSettings()
+  ]);
+  const settings = getEffectiveEnforcementSettings(storedSettings);
+  const reason = await findTimeRuleBlock(url, settings, dataset.profile);
+  if (!reason) return { ok: true, blocked: false };
+
+  // The document_start content script has already hidden the destination, so
+  // replacing the tab here produces no visible flash of the blocked site.
+  redirectInFlight.add(tabId);
+  recentlyRedirected.set(tabId, { url, at: Date.now() });
+  try {
+    sendNativeBlockLog(reason, url, '');
+    await browser.tabs.update(tabId, { url: blockedPageUrl(reason, url) });
+    try { await browser.history.deleteUrl({ url }); } catch {}
+    return { ok: true, blocked: true };
+  } catch (error) {
+    console.warn('[BraveFox Focus Master] Time Rule pre-paint redirect failed:', error);
+    return { ok: false, blocked: false, error: String(error?.message || error) };
+  } finally {
+    redirectInFlight.delete(tabId);
+  }
 }
 
 async function evaluateNavigation(tabId, url, title = '') {
@@ -424,19 +488,109 @@ async function evaluateNavigation(tabId, url, title = '') {
   // Trusted sites now live in the same synchronized dataset as the other
   // Focus Master rules. Loading the dataset first also applies the current
   // trusted-domain/path snapshot before any blocking decision is made.
-  const [dataset, settings] = await Promise.all([
+  const [dataset, storedSettings] = await Promise.all([
     loadDataset(),
     getSettings()
   ]);
+  const settings = getEffectiveEnforcementSettings(storedSettings);
 
-  // Priority 1: TrustedSites.csv is a true allow-list. A domain entry exempts
-  // that entire domain (including subdomains and every path/query) from all
-  // Focus Master blocking layers, including TLD and fetched-host blocking. A
-  // path entry exempts only its matching path tree.
-  if (isCompletelyExcludedUrl(url)) return;
+  // Priority 1A: unsupported archive services are an unconditional hard denial.
+  // Opaque snapshot IDs can hide the original destination, so allowing these
+  // hosts would create a bypass around blocked links/hosts.
+  if (isUnsupportedArchiveUrl(url)) {
+    const unsupportedReason = {
+      type: 'unsupported',
+      trigger: (() => {
+        try { return new URL(url).hostname.toLocaleLowerCase('en-US'); } catch { return 'archive'; }
+      })(),
+      attemptedSearch: ''
+    };
 
-  // Priority 2: the user's own Blocker terms/links apply only after trusted
-  // URLs have been exempted above.
+    redirectInFlight.add(tabId);
+    recentlyRedirected.set(tabId, { url, at: Date.now() });
+    try {
+      sendNativeBlockLog(unsupportedReason, url, '');
+      await browser.tabs.update(tabId, { url: blockedPageUrl(unsupportedReason, url) });
+      try { await browser.history.deleteUrl({ url }); } catch {}
+    } catch (error) {
+      console.warn('[BraveFox Focus Master] Unsupported archive redirect failed:', error);
+    } finally {
+      redirectInFlight.delete(tabId);
+    }
+    return;
+  }
+
+  // Priority 1B: immutable built-in link rules are the hard-denied link floor.
+  // They are compiled into Focus Master, independent of blockedLinks.csv, and
+  // intentionally outrank both Time Rules and Trusted Sites. They still follow
+  // the master/link-blocking switches, just like the immutable floor did before.
+  const hardDeniedDataset = {
+    ...dataset,
+    terms: [],
+    tlds: [],
+    links: HARD_CODED_LINK_RULES
+  };
+  const hardDeniedReason = findBlockReason({ url, title }, hardDeniedDataset, settings);
+  if (hardDeniedReason) {
+    redirectInFlight.add(tabId);
+    recentlyRedirected.set(tabId, { url, at: Date.now() });
+    try {
+      const directTarget = configuredRedirectTarget(hardDeniedReason, settings, url);
+      sendNativeBlockLog(hardDeniedReason, url, directTarget);
+      if (directTarget) {
+        redirectLandingBypass.set(tabId, { url: directTarget, expiresAt: Date.now() + 15_000 });
+        await browser.tabs.update(tabId, { url: directTarget });
+      } else {
+        await browser.tabs.update(tabId, { url: blockedPageUrl(hardDeniedReason, url) });
+      }
+      try { await browser.history.deleteUrl({ url }); } catch {}
+    } catch (error) {
+      console.warn('[BraveFox Focus Master] Hard-denied redirect failed:', error);
+    } finally {
+      redirectInFlight.delete(tabId);
+    }
+    return;
+  }
+
+  // Priority 2: Time Rules.
+  // Scheduled blocks and Daily usage limits are equal-priority restrictions.
+  // Either one blocks the page before Trusted Sites is considered. If both are
+  // active simultaneously, findTimeRuleBlock() returns the schedule only so the
+  // blocked page can show the more useful "blocked until HH:MM" message.
+  const timeReason = await findTimeRuleBlock(url, settings, dataset.profile);
+  if (timeReason) {
+    redirectInFlight.add(tabId);
+    recentlyRedirected.set(tabId, { url, at: Date.now() });
+    try {
+      sendNativeBlockLog(timeReason, url, '');
+      await browser.tabs.update(tabId, { url: blockedPageUrl(timeReason, url) });
+      try { await browser.history.deleteUrl({ url }); } catch {}
+    } catch (error) {
+      console.warn('[BraveFox Focus Master] Time-rule redirect failed:', error);
+    } finally {
+      redirectInFlight.delete(tabId);
+    }
+    return;
+  }
+
+  // Priority 3: TrustedSites.csv is an allow-list for the normal blocker only.
+  // It cannot bypass hard-denied built-ins, schedules, or Daily usage limits.
+  // Archive/proxy wrappers also cannot launder a blocked destination merely
+  // because the wrapper itself is trusted.
+  const wrappedTargets = extractWrappedTargetUrls(url);
+  if (wrappedTargets.length) {
+    if (wrappedTargets.every(target => isCompletelyExcludedUrl(target))) return;
+  } else if (isCompletelyExcludedUrl(url)) {
+    return;
+  }
+
+  // Priority 4A: normal user-managed Blocker terms / links / TLDs.
+  // The immutable built-in link floor has already been enforced at Priority 1B,
+  // so the normal matcher uses only the synchronized/user-managed dataset here.
+  const effectiveDataset = {
+    ...dataset,
+    links: uniqueInOrder([...HARD_CODED_LINK_RULES, ...dataset.links], normalizeLinkForStorage)
+  };
   const reason = findBlockReason({ url, title }, dataset, settings);
   if (reason) {
     redirectInFlight.add(tabId);
@@ -459,15 +613,16 @@ async function evaluateNavigation(tabId, url, title = '') {
     return;
   }
 
-  // A host with path/query-specific blockedLinks.csv rules is intentionally
-  // being controlled surgically. Do not let fetchedHosts turn those specific
-  // rules into an accidental whole-domain block. A bare host rule would have
-  // matched at Priority 2 and returned above.
-  if (settings.enabled && settings.blockLinks && hasScopedLinkRulesForUrl(url, dataset.links)) return;
-
-  // Priority 3: fetched hosts are the blunt fallback. They do not redirect to
-  // the Blocker page; attempting to open one simply closes that tab.
-  const blockedHost = await findBlockedHost(url);
+  // Priority 4B: fetched hosts are the blunt normal-blocker fallback. Archive/proxy URLs are
+  // checked against both the wrapper and every deterministic unwrapped target.
+  // Path/query-specific Blocker rules keep their surgical-control exemption on
+  // the corresponding candidate host instead of globally disabling host checks.
+  let blockedHost = '';
+  for (const candidateUrl of expandWrappedWebUrls(url)) {
+    if (settings.enabled && settings.blockLinks && hasScopedLinkRulesForUrl(candidateUrl, effectiveDataset.links)) continue;
+    blockedHost = await findBlockedHost(candidateUrl);
+    if (blockedHost) break;
+  }
   if (!blockedHost) return;
 
   const hostReason = { type: 'host', trigger: blockedHost, attemptedSearch: '' };
@@ -506,6 +661,12 @@ browser.webNavigation.onBeforeNavigate.addListener(details => {
   if (details.frameId !== 0) return;
   void evaluateNavigation(details.tabId, details.url, '');
 });
+try {
+  browser.webNavigation.onHistoryStateUpdated.addListener(details => {
+    if (details.frameId !== 0) return;
+    void evaluateNavigation(details.tabId, details.url, '');
+  });
+} catch {}
 browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   const urlChanged = typeof changeInfo.url === 'string' && Boolean(changeInfo.url);
   const titleChanged = typeof changeInfo.title === 'string';
@@ -533,13 +694,27 @@ browser.storage.onChanged.addListener((changes, areaName) => {
       invalidateDatasetCache();
       void loadDataset({ force: true }).catch(() => {});
     }
-  } else if (areaName === 'local' && changes[STORAGE_KEYS.localDataset]) invalidateDatasetCache();
+  } else if (areaName === 'local' && changes[STORAGE_KEYS.localDataset]) {
+    invalidateDatasetCache();
+  }
+
+  const timeSettingsChanged =
+    (areaName === 'sync' && Boolean(changes[STORAGE_KEYS.settings])) ||
+    (areaName === 'local' && Boolean(changes[STORAGE_KEYS.localSettings]));
+
+  if (timeSettingsChanged) {
+    void getSettings()
+      .then(settings => refreshTimeRulePrepaintRegistration(settings))
+      .catch(() => {});
+  }
 });
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message?.type || !String(message.type).startsWith('BFB_')) return;
   (async () => {
     switch (message.type) {
+      case MESSAGE.timeRulePrepaintCheck:
+        return prepaintTimeRuleCheck(message, sender);
       case MESSAGE.getBootstrap:
         return bootstrapManager(sender);
       case MESSAGE.checkAccess:
@@ -592,9 +767,11 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case MESSAGE.updateAdminSettings: {
         const tabId = await requireAdminAccess(sender);
+        const settings = await updateSettings(sanitizeAdminPatch(message.patch));
+        void sampleTimeRuleUsageNow();
         return {
           ok: true,
-          settings: await updateSettings(sanitizeAdminPatch(message.patch)),
+          settings,
           adminUnlocked: await isAdminTabUnlocked(tabId)
         };
       }
@@ -628,6 +805,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           links: saved.links,
           tlds: saved.tlds,
           trustedSites: saved.trustedSites,
+          profile: saved.profile,
           storageStatus: publicStorageStatus(saved),
           settings,
           settingsRestored: true,
@@ -643,6 +821,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           links: result.dataset.links,
           tlds: result.dataset.tlds,
           trustedSites: result.dataset.trustedSites,
+          profile: result.dataset.profile,
           settings: result.settings,
           adminUnlocked: await isAdminTabUnlocked(tabId),
           storageStatus: publicStorageStatus(result.dataset)
@@ -675,6 +854,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           links: result.dataset.links,
           tlds: result.dataset.tlds,
           trustedSites: result.dataset.trustedSites,
+          profile: result.dataset.profile,
           storageStatus: publicStorageStatus(result.dataset),
           githubSync: await getGitHubSyncStatus(),
           usedBundledFallback: Boolean(result.usedBundledFallback)
@@ -689,6 +869,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           links: result.dataset.links,
           tlds: result.dataset.tlds,
           trustedSites: result.dataset.trustedSites,
+          profile: result.dataset.profile,
           storageStatus: publicStorageStatus(result.dataset),
           githubSync: await getGitHubSyncStatus()
         };
@@ -710,6 +891,20 @@ try {
   const removeAuthResult = browser.storage.sync?.remove?.(STORAGE_KEYS.auth);
   if (removeAuthResult?.catch) void removeAuthResult.catch(() => {});
 } catch {}
+void getSettings()
+  .then(settings => refreshTimeRulePrepaintRegistration(settings))
+  .catch(error => console.warn('[BraveFox Focus Master] Initial Time Rule pre-paint registration failed:', error));
+
+initializeTimeRuleTracking({
+  getContext: async () => {
+    const [settings, dataset] = await Promise.all([getSettings(), loadDataset()]);
+    return { settings: getEffectiveEnforcementSettings(settings), profile: dataset.profile };
+  },
+  onActiveTabSample: async (tabId, url) => {
+    await evaluateNavigation(tabId, url, '');
+  }
+});
+
 void (async () => {
   try {
     await initializeTrustedSites();

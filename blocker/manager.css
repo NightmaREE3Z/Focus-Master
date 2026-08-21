@@ -198,3 +198,38 @@ html[data-platform="android"] .sync-dialog-actions button { min-height: 46px; }
 
 html[data-platform="android"] .subpanel-heading { align-items: stretch; }
 html[data-platform="android"] .count-pill { align-self: start; }
+
+
+/* Timers & daily limits — 2026-08-21 */
+.timer-heading-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.timer-profile-label { display: grid; gap: 6px; min-width: 150px; color: #475569; font-size: 12px; font-weight: 800; }
+.timer-profile-label select { min-height: 40px; padding: 8px 11px; border: 1px solid #cfd7e6; border-radius: 9px; background: #fff; color: #172033; font: inherit; }
+.timer-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.timer-editor-panel { display: grid; gap: 10px; align-content: start; padding: 15px; border: 1px solid #e7ebf2; border-radius: 13px; background: #fbfcfe; }
+.timer-editor-panel h3 { font-size: 16px; }
+.timer-add-grid { display: grid; grid-template-columns: minmax(190px, 1fr) auto auto; gap: 8px; align-items: end; }
+.timer-add-grid > input[type="text"] { grid-column: 1 / -1; }
+.timer-add-grid label { display: grid; gap: 5px; color: #64748b; font-size: 11px; font-weight: 800; }
+.timer-add-grid input { min-height: 39px; }
+.timer-add-grid button { min-height: 39px; }
+.timer-rule-list { display: grid; gap: 7px; }
+.timer-rule { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 11px; border: 1px solid #e4e9f1; border-radius: 10px; background: #fff; }
+.timer-rule-copy { min-width: 0; display: grid; gap: 2px; }
+.timer-rule-target { overflow-wrap: anywhere; font-size: 13px; font-weight: 800; color: #1f2937; }
+.timer-rule-detail { font-size: 11px; color: #64748b; }
+.timer-rule-remove { border: 0; border-radius: 8px; padding: 7px 9px; background: #fff0f2; color: #a52a38; font-weight: 800; }
+.timer-rule-remove:hover { background: #ffe2e6; }
+.timer-empty { padding: 12px; border: 1px dashed #d6dce7; border-radius: 10px; text-align: center; font-size: 12px; color: #7c8598 !important; }
+.timer-footnote { padding-top: 3px; font-size: 12px; }
+
+@media (max-width: 1100px) {
+  .timer-columns { grid-template-columns: 1fr; }
+  .timer-heading-row { flex-direction: column; }
+  .timer-profile-label { width: 100%; }
+}
+
+html[data-platform="android"] .timer-columns { grid-template-columns: 1fr; }
+html[data-platform="android"] .timer-heading-row { flex-direction: column; }
+html[data-platform="android"] .timer-profile-label { width: 100%; }
+html[data-platform="android"] .timer-add-grid { grid-template-columns: 1fr; }
+html[data-platform="android"] .timer-add-grid > input[type="text"] { grid-column: auto; }

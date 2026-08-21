@@ -22,6 +22,7 @@
     <nav aria-label="Focus Master sections">
       <button class="nav-button active" data-view="terms">Blocked Terms <span id="termCount">0</span></button>
       <button class="nav-button" data-view="links">Links / TLDs <span id="linkTldCount">0</span></button>
+      <button class="nav-button" data-view="dailyLimits">Daily Limits <span id="dailyLimitCount">0</span></button>
       <button class="nav-button" data-view="trustedSites">Trusted Sites <span id="trustedSiteCount">0</span></button>
       <button class="nav-button" data-view="settings">Settings</button>
     </nav>
@@ -130,6 +131,24 @@
       </article>
     </section>
 
+    <section id="dailyLimitsView" class="settings-shell" hidden>
+      <article id="dailyLimitsLocked" class="settings-lock-card">
+        <div class="settings-lock-icon" aria-hidden="true">🔒</div>
+        <div class="settings-lock-copy">
+          <h2>Daily Limits are locked</h2>
+          <p>Enter the fixed BraveFox password to manage scheduled blocks and daily site-use limits.</p>
+          <form id="dailyLimitsUnlockForm" class="settings-unlock-form" autocomplete="off">
+            <div class="password-row">
+              <input id="dailyLimitsPasswordInput" type="password" autocomplete="current-password" placeholder="Enter password" aria-label="Enter the BraveFox password">
+              <button id="dailyLimitsUnlockButton" class="primary-button" type="submit">Unlock Daily Limits</button>
+            </div>
+            <div id="dailyLimitsError" class="inline-error" role="alert" aria-live="polite"></div>
+          </form>
+        </div>
+      </article>
+      <div id="dailyLimitsControlsMount"></div>
+    </section>
+
     <section id="settingsView" class="settings-shell" hidden>
       <article id="adminLocked" class="settings-lock-card">
         <div class="settings-lock-icon" aria-hidden="true">🔒</div>
@@ -209,6 +228,59 @@
     </div>
   </dialog>
 
+  <template id="dailyLimitsUiTemplate">
+<div id="dailyLimitsControls" class="settings-controls">
+  <div class="settings-unlocked-bar">
+    <span class="status-badge unlocked">Unlocked</span>
+    <button id="lockDailyLimitsButton" class="secondary-button" type="button">Lock protected controls</button>
+  </div>
+
+  <section id="timeSettings" class="setting-card protected-dependent-group">
+    <div class="timer-heading-row">
+      <div>
+        <h2>Daily Limits</h2>
+        <p>Schedule site blocks or give selected sites a daily focused-use budget. Rules are stored per Focus Master profile and use this device's local clock.</p>
+      </div>
+      <label class="timer-profile-label">Edit profile
+        <select id="timerProfileSelect">
+          <option value="haukkis">Haukkis</option>
+          <option value="tapsa">Tapsa</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="timer-columns">
+      <div class="timer-editor-panel">
+        <h3>Scheduled blocks</h3>
+        <p class="field-help">Example: block a site every night from 23:00 until 10:00. Overnight ranges are supported.</p>
+        <div class="timer-add-grid schedule-grid">
+          <input id="scheduleLinkInput" type="text" autocomplete="off" placeholder="example.com or example.com/path">
+          <label>From <input id="scheduleStartInput" type="time" value="23:00"></label>
+          <label>Until <input id="scheduleEndInput" type="time" value="10:00"></label>
+          <button id="addScheduleButton" class="secondary-button" type="button">Add schedule</button>
+        </div>
+        <div id="scheduleRulesList" class="timer-rule-list"></div>
+        <p id="scheduleEmptyState" class="timer-empty">No scheduled blocks for this profile.</p>
+      </div>
+
+      <div class="timer-editor-panel">
+        <h3>Daily time limits</h3>
+        <p class="field-help">Only focused-tab time counts. When the budget is exhausted, the site stays blocked until its reset time.</p>
+        <div class="timer-add-grid quota-grid">
+          <input id="quotaLinkInput" type="text" autocomplete="off" placeholder="example.com or example.com/path">
+          <label>Minutes <input id="quotaMinutesInput" type="number" min="1" max="1440" step="1" value="20"></label>
+          <label>Reset <input id="quotaResetInput" type="time" value="10:00"></label>
+          <button id="addQuotaButton" class="secondary-button" type="button">Add daily limit</button>
+        </div>
+        <div id="quotaRulesList" class="timer-rule-list"></div>
+        <p id="quotaEmptyState" class="timer-empty">No daily limits for this profile.</p>
+      </div>
+    </div>
+    <p class="timer-footnote">Built-in immutable link rules are separate from Daily Limits and remain normal always-on link blocks while Focus Master link blocking is enabled.</p>
+  </section>
+</div>
+  </template>
+
   <template id="adminUiTemplate">
 <div id="adminControls" class="settings-controls">
   <div class="settings-unlocked-bar">
@@ -220,7 +292,7 @@
     <div class="admin-master-row">
       <div>
         <h2>Enable Focus Master</h2>
-        <p>Turning it off stops all Focus Master enforcement. Your lists and choices stay saved.</p>
+        <p>Turning it off stops Focus Master enforcement in normal windows. Incognito enforcement always remains enabled. Your lists and choices stay saved.</p>
       </div>
       <label class="master-toggle"><input id="enabledToggle" type="checkbox"><span>Focus Master enabled</span></label>
     </div>
@@ -232,6 +304,7 @@
     <label class="checkbox-line"><input id="blockTermsToggle" type="checkbox"> Block search terms and phrases</label>
     <label class="checkbox-line"><input id="blockLinksToggle" type="checkbox"> Block websites, URL paths and TLDs</label>
   </section>
+
 
   <section id="redirectSettings" class="setting-card protected-dependent-group">
     <h2>Redirects</h2>

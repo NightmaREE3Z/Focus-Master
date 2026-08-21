@@ -10,7 +10,7 @@
   <main class="blocked-page">
     <section class="blocked-copy" aria-labelledby="blockedTitle">
       <h1 id="blockedTitle">Sivusto estetty!</h1>
-      <p>Suksi vittuun siitä.</p>
+      <p id="blockedSubtitle">Suksi vittuun siitä.</p>
     </section>
 
     <section class="blocked-card" aria-label="Eston tiedot">
@@ -27,6 +27,38 @@
         <span id="source" class="source-value">—</span>
       </div>
     </section>
+
+    <div id="scheduleClock" class="schedule-clock" role="img" aria-label="Nykyinen aika" hidden>
+      <span class="clock-ring" aria-hidden="true"></span>
+      <span class="clock-mark clock-mark-12" aria-hidden="true"></span>
+      <span class="clock-mark clock-mark-1" aria-hidden="true"></span>
+      <span class="clock-mark clock-mark-3" aria-hidden="true"></span>
+      <span class="clock-mark clock-mark-5" aria-hidden="true"></span>
+      <span class="clock-mark clock-mark-6" aria-hidden="true"></span>
+      <span class="clock-mark clock-mark-7" aria-hidden="true"></span>
+      <span class="clock-mark clock-mark-9" aria-hidden="true"></span>
+      <span class="clock-mark clock-mark-11" aria-hidden="true"></span>
+      <span id="clockHourHand" class="clock-hand clock-hour" aria-hidden="true"></span>
+      <span id="clockMinuteHand" class="clock-hand clock-minute" aria-hidden="true"></span>
+      <span id="clockSecondHand" class="clock-hand clock-second" aria-hidden="true"></span>
+      <span class="clock-center" aria-hidden="true"></span>
+    </div>
+
+        <div id="quotaVisual" class="quota-visual" hidden aria-hidden="true">
+      <span class="quota-expired-halo"></span>
+      <span class="quota-expired-ring"></span>
+      <span class="quota-expired-ring quota-expired-ring-inner"></span>
+      <span class="quota-expired-hourglass quota-hourglass-top"></span>
+      <span class="quota-expired-hourglass quota-hourglass-bottom"></span>
+      <span class="quota-expired-hourglass quota-hourglass-neck"></span>
+      <span class="quota-expired-sand quota-expired-sand-top"></span>
+      <span class="quota-expired-sand quota-expired-sand-fall"></span>
+      <span class="quota-expired-sand quota-expired-sand-bottom"></span>
+      <span class="quota-expired-mark quota-expired-mark-left"></span>
+      <span class="quota-expired-mark quota-expired-mark-right"></span>
+      <span class="quota-expired-mark quota-expired-mark-top"></span>
+      <span class="quota-expired-mark quota-expired-mark-bottom"></span>
+    </div>
 
     <div class="close-row">
       <button id="closeButton" type="button">Sulje sivu</button>

@@ -3,6 +3,7 @@ import {
   normalizeSearchable,
   normalizeTldForStorage
 } from './shared.js';
+import { expandWrappedWebUrls } from './url-wrappers.js';
 
 const GENERIC_SEARCH_KEYS = new Set([
   'q',
@@ -167,48 +168,53 @@ function canonicalTldSuffix(value) {
 
 export function matchTld(urlValue, tlds) {
   if (!isSupportedWebUrl(urlValue)) return null;
-  let host = '';
-  try {
-    host = new URL(urlValue).hostname.toLocaleLowerCase('en-US').replace(/\.$/, '');
-  } catch {
-    return null;
-  }
-  if (!host) return null;
+  const candidates = expandWrappedWebUrls(urlValue);
 
-  for (const stored of Array.isArray(tlds) ? tlds : []) {
-    const suffix = canonicalTldSuffix(stored);
-    if (!suffix) continue;
-    if (host === suffix || host.endsWith(`.${suffix}`)) return stored;
+  for (const candidateUrl of candidates) {
+    let host = '';
+    try {
+      host = new URL(candidateUrl).hostname.toLocaleLowerCase('en-US').replace(/\.$/, '');
+    } catch {
+      continue;
+    }
+    if (!host) continue;
+
+    for (const stored of Array.isArray(tlds) ? tlds : []) {
+      const suffix = canonicalTldSuffix(stored);
+      if (!suffix) continue;
+      if (host === suffix || host.endsWith(`.${suffix}`)) return stored;
+    }
   }
   return null;
 }
 
 export function matchLink(urlValue, links) {
   if (!isSupportedWebUrl(urlValue)) return null;
-  let candidate;
-  try {
-    candidate = parsedCandidate(urlValue);
-  } catch {
-    return null;
+  const candidates = [];
+  for (const candidateUrl of expandWrappedWebUrls(urlValue)) {
+    try { candidates.push(parsedCandidate(candidateUrl)); } catch {}
   }
+  if (!candidates.length) return null;
 
-  for (const stored of links) {
+  for (const stored of Array.isArray(links) ? links : []) {
     const raw = String(stored || '').trim();
     if (!raw) continue;
 
-    if (raw.includes('*')) {
-      const canonical = `${candidate.host}${candidate.url.pathname === '/' ? '' : normalizeRulePath(candidate.url.pathname)}${candidate.url.search || ''}`
-        .toLocaleLowerCase('en-US');
-      const normalizedRule = raw
-        .replace(/^https?:\/\//i, '')
-        .replace(/^www\./i, '')
-        .toLocaleLowerCase('en-US');
-      if (wildcardRegex(normalizedRule).test(canonical)) return stored;
-      continue;
-    }
+    for (const candidate of candidates) {
+      if (raw.includes('*')) {
+        const canonical = `${candidate.host}${candidate.url.pathname === '/' ? '' : normalizeRulePath(candidate.url.pathname)}${candidate.url.search || ''}`
+          .toLocaleLowerCase('en-US');
+        const normalizedRule = raw
+          .replace(/^https?:\/\//i, '')
+          .replace(/^www\./i, '')
+          .toLocaleLowerCase('en-US');
+        if (wildcardRegex(normalizedRule).test(canonical)) return stored;
+        continue;
+      }
 
-    const rule = parseStructuredLinkRule(raw);
-    if (rule && structuredLinkRuleMatches(candidate, rule)) return stored;
+      const rule = parseStructuredLinkRule(raw);
+      if (rule && structuredLinkRuleMatches(candidate, rule)) return stored;
+    }
   }
   return null;
 }
@@ -271,12 +277,13 @@ function searchValuesForUrl(url) {
 }
 
 export function extractAttemptedSearch(urlValue) {
-  try {
-    const values = searchValuesForUrl(new URL(urlValue));
-    return values[0] || '';
-  } catch {
-    return '';
+  for (const candidateUrl of expandWrappedWebUrls(urlValue)) {
+    try {
+      const values = searchValuesForUrl(new URL(candidateUrl));
+      if (values[0]) return values[0];
+    } catch {}
   }
+  return '';
 }
 
 export function extractTermCandidates({ url, title = '' }) {
@@ -345,11 +352,21 @@ function exactHostnameLabels(urlValue) {
 
 export function matchTerm({ url, title = '' }, terms) {
   if (!isSupportedWebUrl(url)) return null;
-  const candidates = extractTermCandidates({ url, title });
-  const hostLabels = exactHostnameLabels(url);
-  if (!candidates.length && !hostLabels.length) return null;
+  const urlCandidates = expandWrappedWebUrls(url);
+  const fields = [];
+  const hostLabels = [];
 
-  for (const stored of terms) {
+  urlCandidates.forEach((candidateUrl, index) => {
+    fields.push(...extractTermCandidates({
+      url: candidateUrl,
+      title: index === 0 ? title : ''
+    }));
+    hostLabels.push(...exactHostnameLabels(candidateUrl));
+  });
+
+  if (!fields.length && !hostLabels.length) return null;
+
+  for (const stored of Array.isArray(terms) ? terms : []) {
     const normalizedTerm = normalizeSearchable(stored);
 
     // Hostnames get intentionally strict matching: a blocked term may match an
@@ -359,7 +376,7 @@ export function matchTerm({ url, title = '' }, terms) {
     // catch aionly.com/onlyai.com without reviving microsoftONLINE + clAIms.
     if (normalizedTerm && hostLabels.includes(normalizedTerm)) return stored;
 
-    if (candidates.some(candidate => termMatchesCandidate(candidate, stored))) return stored;
+    if (fields.some(candidate => termMatchesCandidate(candidate, stored))) return stored;
   }
   return null;
 }

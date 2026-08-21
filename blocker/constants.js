@@ -1,4 +1,4 @@
-export const BLOCKER_VERSION = '1.0.0-beta.4';
+export const BLOCKER_VERSION = '1.2.0';
 
 export const STORAGE_KEYS = Object.freeze({
   datasetMeta: 'bfb:dataset-meta',
@@ -9,7 +9,9 @@ export const STORAGE_KEYS = Object.freeze({
   localSettings: 'bfb:local-settings',
   managerSessions: 'bfb:manager-sessions',
   managerTabs: 'bfb:manager-tabs',
-  adminSessions: 'bfb:admin-sessions'
+  adminSessions: 'bfb:admin-sessions',
+  timerUsage: 'bfb:timer-usage',
+  timerTracker: 'bfb:timer-tracker'
 });
 
 export const DEFAULT_SETTINGS = Object.freeze({
@@ -21,7 +23,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   redirectTerms: false,
   redirectTermsUrl: '',
   redirectLinks: false,
-  redirectLinksUrl: ''
+  redirectLinksUrl: '',
+  scheduledRules: Object.freeze([]),
+  quotaRules: Object.freeze([])
 });
 
 export const MESSAGE = Object.freeze({
@@ -44,7 +48,8 @@ export const MESSAGE = Object.freeze({
   saveGitHubSyncConfig: 'BFB_SAVE_GITHUB_SYNC_CONFIG',
   downloadGitHubLists: 'BFB_DOWNLOAD_GITHUB_LISTS',
   uploadGitHubLists: 'BFB_UPLOAD_GITHUB_LISTS',
-  openManager: 'BFB_OPEN_MANAGER'
+  openManager: 'BFB_OPEN_MANAGER',
+  timeRulePrepaintCheck: 'BFB_TIME_RULE_PREPAINT_CHECK'
 });
 
 export const DATASET_PREFIX = 'bfb:data:';
