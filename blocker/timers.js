@@ -346,6 +346,15 @@ let completedSampleGeneration = 0;
 let contextProvider = null;
 let activeTabCallback = null;
 
+function isTwitchUrl(value) {
+  try {
+    const host = new URL(String(value || '')).hostname.toLowerCase();
+    return host === 'twitch.tv' || host.endsWith('.twitch.tv');
+  } catch {
+    return false;
+  }
+}
+
 async function runFocusedUsageSample() {
   const now = Date.now();
   const trackerRoot = await readTrackerState();
@@ -366,7 +375,7 @@ async function runFocusedUsageSample() {
   const tab = await focusedActiveTab();
   let currentRules = [];
 
-  if (tab?.url && context?.settings?.enabled) {
+  if (tab?.url && !isTwitchUrl(tab.url) && context?.settings?.enabled) {
     currentRules = profileRules(context.settings, 'quotaRules', context.profile)
       .filter(rule => linkMatches(tab.url, rule))
       .map(trackerRuleDescriptor);
@@ -387,7 +396,7 @@ async function runFocusedUsageSample() {
 
   // Re-evaluate after committing usage, so a just-exhausted quota redirects the
   // active tab immediately rather than waiting for another navigation.
-  if (tab?.url && typeof activeTabCallback === 'function') {
+  if (tab?.url && !isTwitchUrl(tab.url) && typeof activeTabCallback === 'function') {
     try { await activeTabCallback(tab.id, tab.url); } catch {}
   }
 }

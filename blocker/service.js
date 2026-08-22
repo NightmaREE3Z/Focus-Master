@@ -478,8 +478,18 @@ async function prepaintTimeRuleCheck(message, sender) {
   }
 }
 
+function isTwitchUrl(value) {
+  try {
+    const host = new URL(String(value || '')).hostname.toLowerCase();
+    return host === 'twitch.tv' || host.endsWith('.twitch.tv');
+  } catch {
+    return false;
+  }
+}
+
 async function evaluateNavigation(tabId, url, title = '') {
   if (!Number.isInteger(tabId) || tabId < 0) return;
+  if (isTwitchUrl(url)) return;
   if (!isSupportedWebUrl(url)) return;
   if (shouldBypassRedirect(tabId, url) || redirectInFlight.has(tabId)) return;
   const last = recentlyRedirected.get(tabId);

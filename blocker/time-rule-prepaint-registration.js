@@ -107,6 +107,7 @@ async function applyRegistration(settings) {
     id: SCRIPT_ID,
     js: [SCRIPT_FILE],
     matches,
+    excludeMatches: ['*://twitch.tv/*', '*://*.twitch.tv/*'],
     runAt: 'document_start',
     allFrames: false,
     persistAcrossSessions: true
