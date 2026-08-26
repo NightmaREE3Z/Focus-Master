@@ -119,6 +119,7 @@ const HARD_CODED_LINKS = Object.freeze(
   "gemini.google.com",
   "user/3ws1lu2bwli971gvhv28yemrm",
   "instagram.com/taijamaarit",
+  "instagram.com/emiliaaq96",
   "upskirt.tv",
   "celeb.gate.cc",
   "pullpush.io",
