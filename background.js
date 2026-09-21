@@ -953,7 +953,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         };
       case MESSAGE.downloadGitHubLists: {
         await requireManagerAccess(sender);
-        const result = await downloadGitHubLists({ allowBundledFallback: true });
+        const result = await downloadGitHubLists({ allowBundledFallback: false });
         return {
           ok: true,
           terms: result.dataset.terms,

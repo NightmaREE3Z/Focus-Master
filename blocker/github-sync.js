@@ -700,7 +700,7 @@ export async function queueRemoteSnapshot(kind){
 }
 export function scheduleAutomaticGitHubSync(){try{browser.alarms.clear(DEBOUNCED_SYNC_ALARM);browser.alarms.create(DEBOUNCED_SYNC_ALARM,{when:Date.now()+DEBOUNCE_MS});}catch{}}
 
-export async function downloadGitHubLists({allowBundledFallback=true}={}){
+export async function downloadGitHubLists({allowBundledFallback=false}={}){
   let config=await readConfig();
   const profile=config.activeProfile;
   const downloaded=await fetchRawLists({profileId:profile,bundledFallback:allowBundledFallback});
@@ -762,30 +762,41 @@ function markInitializedKind(state,kind,profile){
 
 async function initializeKind(kind,profile,current,state,canUpload){
   let remote;
-  let missingRemote=false;
   try {
     remote=await fetchRawKind(kind,profile);
   } catch(error) {
-    const bundled=await loadBundledFallbackLists(profile);
-    remote=bundled[kind];
-    missingRemote=Number(error?.status)===404;
+    if(Number(error?.status)!==404) throw error;
+
+    // A missing GitHub file may be created from the current local list, but a
+    // packaged fallback must never be merged into an existing dataset here.
+    state=markInitializedKind(state,kind,profile);
+    if(canUpload){
+      const uploaded=await uploadExactKind(kind,(await readConfig()).token,current,profile);
+      state=clearPending(state,kind,profile);
+      return{values:uploaded,state,uploaded:true};
+    }
+    return{
+      values:current,
+      state,
+      warning:'The GitHub list does not exist yet; the current local copy remains active until an upload creates it.'
+    };
   }
-  const normalize=normalizerFor(kind);
-  const merged=uniqueInOrder([...remote,...current],normalize);
-  const remoteSet=new Set(remote.map(normalize));
-  const hasLocalExtra=current.some(value=>!remoteSet.has(normalize(value)));
-  state=setForce(state,kind,profile,hasLocalExtra);
+
+  const hasPending=forceFor(state,kind,profile)||pendingFor(state,kind,profile).length>0;
   state=markInitializedKind(state,kind,profile);
-  if((hasLocalExtra||missingRemote)&&canUpload){
-    const uploaded=await uploadExactKind(kind,(await readConfig()).token,merged,profile);
+  if(hasPending&&canUpload){
+    const uploaded=await uploadMergedKind(kind,(await readConfig()).token,current,state,profile);
     state=clearPending(state,kind,profile);
     return{values:uploaded,state,uploaded:true};
   }
-  return{
-    values:merged,
-    state,
-    warning:missingRemote?'The GitHub list does not exist yet; the packaged/local copy remains active until an upload creates it.':''
-  };
+  if(hasPending){
+    const values=forceFor(state,kind,profile)?current:applyOperations(remote,kind,pendingFor(state,kind,profile));
+    return{values,state,warning:'Pending changes are local until a token and upload consent are available.'};
+  }
+
+  // With no explicit local changes pending, GitHub is the synchronization
+  // source of truth. Do not union it with bundled or stale local backup data.
+  return{values:remote,state};
 }
 
 async function syncKind(kind,profile,current,state,canUpload){

@@ -262,33 +262,44 @@ async function writeSyncDataset(snapshot) {
   return verified;
 }
 
-function chooseNewest(local, synced) {
-  if (!local) return synced;
-  if (!synced) return local;
-  // Never let a profile-sync snapshot for Haukkis replace a local Tapsa list, or vice versa.
-  if (local.profile !== synced.profile) return local;
-  if (local.updatedAt > synced.updatedAt) return local;
-  if (synced.updatedAt > local.updatedAt) return synced;
-  if (local.revision === synced.revision) return local;
-  return local;
+function choosePrimaryDataset(local, synced) {
+  // browser.storage.sync is a recovery mirror, not a source of truth. Once a
+  // local dataset exists, always keep it authoritative regardless of mirror
+  // timestamps. The sync copy is only allowed to restore a missing local copy.
+  return local || synced;
 }
 
 function scheduleDatasetRepair(snapshot) {
   if (datasetRepairPromise || !snapshot) return;
   datasetRepairPromise = (async () => {
+    let retrySnapshot = null;
     try {
       await writeSyncDataset(snapshot);
-      await writeLocalDataset(snapshot, { syncPending: false, syncError: '' });
-      if (cachedDataset?.revision === snapshot.revision) {
-        cachedDataset = { ...cachedDataset, syncPending: false, syncError: '' };
+      const latestLocal = await readLocalDataset();
+      if (latestLocal?.revision === snapshot.revision) {
+        await writeLocalDataset(snapshot, { syncPending: false, syncError: '' });
+        if (cachedDataset?.revision === snapshot.revision) {
+          cachedDataset = { ...cachedDataset, syncPending: false, syncError: '' };
+        }
+      } else if (latestLocal) {
+        // This repair became stale while it was running. Never let an older
+        // backup job overwrite a newer local edit; repair the mirror again from
+        // the latest local revision instead.
+        retrySnapshot = latestLocal;
       }
     } catch (error) {
-      await writeLocalDataset(snapshot, {
-        syncPending: true,
-        syncError: String(error?.message || error)
-      });
+      const latestLocal = await readLocalDataset();
+      if (latestLocal?.revision === snapshot.revision) {
+        await writeLocalDataset(snapshot, {
+          syncPending: true,
+          syncError: String(error?.message || error)
+        });
+      } else if (latestLocal) {
+        retrySnapshot = latestLocal;
+      }
     } finally {
       datasetRepairPromise = null;
+      if (retrySnapshot) scheduleDatasetRepair(retrySnapshot);
     }
   })();
 }
@@ -301,10 +312,11 @@ export async function loadDataset({ force = false } = {}) {
     readSyncDataset().catch(() => null),
     readConfiguredProfileId()
   ]);
-  // A fresh install must not inherit the other person's terms merely because
-  // browser profile-sync happened to contain a snapshot from that profile.
+  // A fresh install may recover from the browser profile mirror, but it must
+  // never inherit the other person's terms. Once local data exists, that local
+  // copy is authoritative and the browser mirror is backup-only.
   const usableSynced = (!local && synced?.profile !== activeProfile) ? null : synced;
-  let chosen = chooseNewest(local, usableSynced);
+  let chosen = choosePrimaryDataset(local, usableSynced);
   if (!chosen) {
     try {
       const initial = await loadRemoteFirstLists(activeProfile);
@@ -337,9 +349,17 @@ export async function loadDataset({ force = false } = {}) {
     }
   }
 
-  if (usableSynced && (!local || usableSynced.updatedAt > local.updatedAt || usableSynced.revision !== local.revision) && (!local || usableSynced.profile === local.profile)) {
+  if (!local && usableSynced) {
+    // Recovery path only: hydrate a missing local dataset from the profile mirror.
     await writeLocalDataset(usableSynced, { syncPending: false, syncError: '' });
-  } else if (local && (!usableSynced || local.updatedAt > usableSynced.updatedAt || local.syncPending)) {
+  } else if (local && (
+    !usableSynced ||
+    usableSynced.profile !== local.profile ||
+    usableSynced.revision !== local.revision ||
+    local.syncPending
+  )) {
+    // Local wins every disagreement. Repair the mirror from local instead of
+    // pulling potentially stale/deleted terms back into the active dataset.
     scheduleDatasetRepair(local);
   }
 
