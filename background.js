@@ -40,6 +40,7 @@ import {
 import { normalizeTrustedSiteEntry } from './blocker/trusted-sites.js';
 import {
   isCompletelyExcludedUrl,
+  isGoogleMapsOrEarthUrl,
   isIncognitoSender,
   isSupportedWebUrl,
   normalizeLinkForStorage,
@@ -548,6 +549,7 @@ async function prepaintTimeRuleCheck(message, sender) {
   if (!Number.isInteger(tabId) || tabId < 0 || !isSupportedWebUrl(url)) {
     return { ok: true, blocked: false };
   }
+  if (isGoogleMapsOrEarthUrl(url)) return { ok: true, blocked: false };
 
   const [dataset, storedSettings] = await Promise.all([
     loadDataset(),
@@ -587,6 +589,7 @@ async function evaluateNavigation(tabId, url, title = '') {
   if (!Number.isInteger(tabId) || tabId < 0) return;
   if (isTwitchUrl(url)) return;
   if (!isSupportedWebUrl(url)) return;
+  if (isGoogleMapsOrEarthUrl(url)) return;
   if (shouldBypassRedirect(tabId, url) || redirectInFlight.has(tabId)) return;
   const last = recentlyRedirected.get(tabId);
   if (last && last.url === url && Date.now() - last.at < 1500) return;

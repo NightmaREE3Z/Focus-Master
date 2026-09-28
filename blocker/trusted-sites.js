@@ -216,6 +216,27 @@ export async function refreshTrustedSites() {
   return getTrustedSitesStatus();
 }
 
+export function isGoogleMapsOrEarthUrl(value) {
+  try {
+    const parsed = new URL(String(value || ''));
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+
+    const host = normalizeHost(parsed.hostname);
+    const pathname = String(parsed.pathname || '/').replace(/\/{2,}/g, '/').toLocaleLowerCase('en-US');
+    const googleBaseHost = /^google\.(?:[a-z]{2,3}|[a-z]{2,3}\.[a-z]{2})$/i;
+    const googleMapsOrEarthHost = /^(?:maps|earth)\.google\.(?:[a-z]{2,3}|[a-z]{2,3}\.[a-z]{2})$/i;
+
+    if (host === 'maps.app.goo.gl' || googleMapsOrEarthHost.test(host)) return true;
+    if (host === 'goo.gl') return pathname === '/maps' || pathname.startsWith('/maps/');
+    if (!googleBaseHost.test(host)) return false;
+
+    return pathname === '/maps' || pathname.startsWith('/maps/') ||
+      pathname === '/earth' || pathname.startsWith('/earth/');
+  } catch {
+    return false;
+  }
+}
+
 export function isTrustedHostname(value) {
   const host = normalizeHost(value);
   if (!host) return false;
@@ -227,6 +248,7 @@ export function isTrustedHostname(value) {
 }
 
 export function isTrustedUrl(value) {
+  if (isGoogleMapsOrEarthUrl(value)) return true;
   try {
     const parsed = new URL(value);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;

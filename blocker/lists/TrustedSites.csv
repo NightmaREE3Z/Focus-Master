@@ -77,6 +77,7 @@ domain,stockmann.com,
 domain,sokos.fi,
 domain,alko.fi,
 domain,k-citymarket.fi,
+domain,maps.google.com,
 domain,alepa.fi,
 domain,bauhaus.fi,
 domain,clasohlson.com,
@@ -350,6 +351,7 @@ path,reddit.com,/r/fuckyoukaren
 path,reddit.com,/r/dimensionjumping
 path,reddit.com,/r/Anxiety
 path,reddit.com,/r/Suomi
+path,google.com,/maps
 path,microsoft.com,/en-us/software-download/windowsinsiderpreviewiso
 path,microsoft.com,/fi-fi/software-download/windows11
 path,microsoft.com,/en-gb/software-download/windows11

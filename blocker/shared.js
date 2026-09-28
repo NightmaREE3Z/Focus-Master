@@ -1,4 +1,4 @@
-import { isTrustedHostname, isTrustedUrl } from './trusted-sites.js';
+import { isGoogleMapsOrEarthUrl, isTrustedHostname, isTrustedUrl } from './trusted-sites.js';
 
 export function normalizeWhitespace(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -121,6 +121,7 @@ export function isSupportedWebUrl(value) {
 
 export const isCompletelyExcludedHostname = isTrustedHostname;
 export const isCompletelyExcludedUrl = isTrustedUrl;
+export { isGoogleMapsOrEarthUrl };
 
 export function isIncognitoSender(sender) {
   return Boolean(
