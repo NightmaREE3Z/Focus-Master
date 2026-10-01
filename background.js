@@ -88,7 +88,6 @@ const HARD_CODED_LINKS = Object.freeze(
   "wrestlingffp.forumcommunity.net",
   "xvideos.com?k=3d&top",
   "xvideos.com?k=Stephanie+McMahon",
-  "redtube.com",
   "remove.bg",
   "removex.io",
   "removebg.club",
