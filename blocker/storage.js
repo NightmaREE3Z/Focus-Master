@@ -16,7 +16,7 @@ import {
 import { applyTrustedSiteEntries, normalizeTrustedSiteEntry } from './trusted-sites.js';
 import { normalizeQuotaRules, normalizeScheduledRules } from './timers.js';
 
-const DATASET_SCHEMA = 3;
+const DATASET_SCHEMA = 4;
 const GITHUB_CONFIG_KEY = 'bfb:github-sync-config';
 const VALID_PROFILES = new Set(['haukkis', 'tapsa']);
 const REMOTE_BASE = 'https://raw.githubusercontent.com/NightmaREE3Z/Focus-Master/refs/heads/BraveFox/blocker/lists/';
@@ -36,6 +36,7 @@ export async function loadBundledFallbackLists(profileId = 'haukkis') {
   const files = [
     [termFile, 'terms'],
     ['blockedLinks.csv', 'links'],
+    ['blockedPaths.csv', 'paths'],
     ['blockedTLDs.csv', 'tlds'],
     ['TrustedSites.csv', 'trustedSites']
   ];
@@ -52,6 +53,7 @@ export async function loadBundledFallbackLists(profileId = 'haukkis') {
 function filenameForKind(kind, profileId) {
   if (kind === 'terms') return termsFilename(profileId);
   if (kind === 'links') return 'blockedLinks.csv';
+  if (kind === 'paths') return 'blockedPaths.csv';
   if (kind === 'tlds') return 'blockedTLDs.csv';
   if (kind === 'trustedSites') return 'TrustedSites.csv';
   throw new Error('Unknown Focus Master list type.');
@@ -69,7 +71,7 @@ async function fetchRemoteList(kind, profileId) {
 
 export async function loadRemoteFirstLists(profileId = null) {
   const profile = normalizeProfileId(profileId || await readConfiguredProfileId());
-  const kinds = ['terms', 'links', 'tlds', 'trustedSites'];
+  const kinds = ['terms', 'links', 'paths', 'tlds', 'trustedSites'];
   const results = await Promise.allSettled(kinds.map(kind => fetchRemoteList(kind, profile)));
   const output = { profile, usedBundledFallback: false };
   let bundled = null;
@@ -125,17 +127,19 @@ function normalizeDatasetSnapshot(value) {
   if (!value || typeof value !== 'object') return null;
   const terms = uniqueInOrder(value.terms, normalizeTerm);
   const links = uniqueInOrder(value.links, normalizeLinkForStorage);
+  const paths = uniqueInOrder(value.paths, normalizeLinkForStorage);
   const tlds = uniqueInOrder(value.tlds, normalizeTldForStorage);
   const trustedSites = uniqueInOrder(value.trustedSites, normalizeTrustedSiteEntry);
   const updatedAt = Number(value.updatedAt) || 0;
   const revision = String(value.revision || '');
   const profile = normalizeProfileId(value.profile);
   const schema = Math.max(2, Number(value.schema) || 2);
-  if (!revision && !terms.length && !links.length && !tlds.length && !trustedSites.length && !updatedAt) return null;
+  if (!revision && !terms.length && !links.length && !paths.length && !tlds.length && !trustedSites.length && !updatedAt) return null;
   return {
     schema,
     terms,
     links,
+    paths,
     tlds,
     trustedSites,
     revision,
@@ -162,6 +166,7 @@ async function readSyncVersion(version) {
   const chunkCounts = {
     terms: Number(version.termChunks || 0),
     links: Number(version.linkChunks || 0),
+    paths: Number(version.pathChunks || 0),
     tlds: Number(version.tldChunks || 0),
     trustedSites: Number(version.trustedSiteChunks || 0)
   };
@@ -171,7 +176,7 @@ async function readSyncVersion(version) {
   }
 
   const values = await browser.storage.sync.get(keys);
-  const lists = { terms: [], links: [], tlds: [], trustedSites: [] };
+  const lists = { terms: [], links: [], paths: [], tlds: [], trustedSites: [] };
   for (const [kind, count] of Object.entries(chunkCounts)) {
     for (let i = 0; i < count; i += 1) {
       const chunk = values[revisionKey(version.revision, kind, i)];
@@ -207,6 +212,7 @@ async function writeSyncDataset(snapshot) {
   const chunks = {
     terms: chunkArray(clean.terms),
     links: chunkArray(clean.links),
+    paths: chunkArray(clean.paths),
     tlds: chunkArray(clean.tlds),
     trustedSites: chunkArray(clean.trustedSites)
   };
@@ -227,10 +233,12 @@ async function writeSyncDataset(snapshot) {
     profile: clean.profile,
     termChunks: chunks.terms.length,
     linkChunks: chunks.links.length,
+    pathChunks: chunks.paths.length,
     tldChunks: chunks.tlds.length,
     trustedSiteChunks: chunks.trustedSites.length,
     termCount: clean.terms.length,
     linkCount: clean.links.length,
+    pathCount: clean.paths.length,
     tldCount: clean.tlds.length,
     trustedSiteCount: clean.trustedSites.length,
     updatedAt: clean.updatedAt
@@ -246,6 +254,7 @@ async function writeSyncDataset(snapshot) {
   if (!verified || verified.revision !== clean.revision ||
       verified.terms.length !== clean.terms.length ||
       verified.links.length !== clean.links.length ||
+      verified.paths.length !== clean.paths.length ||
       verified.tlds.length !== clean.tlds.length ||
       verified.trustedSites.length !== clean.trustedSites.length) {
     throw new Error('Browser Sync verification failed after saving the Focus Master lists.');
@@ -321,7 +330,7 @@ export async function loadDataset({ force = false } = {}) {
     try {
       const initial = await loadRemoteFirstLists(activeProfile);
       chosen = await saveDataset({
-        terms: initial.terms, links: initial.links, tlds: initial.tlds,
+        terms: initial.terms, links: initial.links, paths: initial.paths, tlds: initial.tlds,
         trustedSites: initial.trustedSites, profile: initial.profile
       });
       if (initial.usedBundledFallback) {
@@ -330,19 +339,23 @@ export async function loadDataset({ force = false } = {}) {
     } catch (error) {
       console.warn('[BraveFox Focus Master] Remote and bundled initial list loading failed:', error);
       chosen = {
-        schema: DATASET_SCHEMA, terms: [], links: [], tlds: [], trustedSites: [],
+        schema: DATASET_SCHEMA, terms: [], links: [], paths: [], tlds: [], trustedSites: [],
         revision: '', profile: activeProfile, updatedAt: 0, syncPending: false,
         syncError: String(error?.message || error)
       };
     }
   } else if (chosen.schema < DATASET_SCHEMA) {
-    // One-time upgrade from the older two-list dataset. Preserve the user's
-    // current Terms/Links exactly and seed only the two new global lists.
+    // One-time dataset upgrade. Preserve every list the installed schema
+    // already knew about and seed only lists introduced by newer schemas.
     try {
       const extended = await loadRemoteFirstLists(chosen.profile);
       chosen = await saveDataset({
-        terms: chosen.terms, links: chosen.links, tlds: extended.tlds,
-        trustedSites: extended.trustedSites, profile: chosen.profile
+        terms: chosen.terms,
+        links: chosen.links,
+        paths: extended.paths,
+        tlds: chosen.schema >= 3 ? chosen.tlds : extended.tlds,
+        trustedSites: chosen.schema >= 3 ? chosen.trustedSites : extended.trustedSites,
+        profile: chosen.profile
       });
     } catch (error) {
       console.warn('[BraveFox Focus Master] Extended-list migration failed; current lists remain active:', error);
@@ -368,13 +381,14 @@ export async function loadDataset({ force = false } = {}) {
   return cachedDataset;
 }
 
-export async function saveDataset({ terms, links, tlds, trustedSites, profile = '' }) {
+export async function saveDataset({ terms, links, paths, tlds, trustedSites, profile = '' }) {
   const existing = await readLocalDataset();
   const snapshotProfile = normalizeProfileId(profile || existing?.profile || await readConfiguredProfileId());
   const snapshot = {
     schema: DATASET_SCHEMA,
     terms: uniqueInOrder(terms ?? existing?.terms ?? [], normalizeTerm),
     links: uniqueInOrder(links ?? existing?.links ?? [], normalizeLinkForStorage),
+    paths: uniqueInOrder(paths ?? existing?.paths ?? [], normalizeLinkForStorage),
     tlds: uniqueInOrder(tlds ?? existing?.tlds ?? [], normalizeTldForStorage),
     trustedSites: uniqueInOrder(trustedSites ?? existing?.trustedSites ?? [], normalizeTrustedSiteEntry),
     profile: snapshotProfile,
@@ -533,6 +547,7 @@ export async function synchronizeNow() {
     dataset = await saveDataset({
       terms: currentDataset.terms,
       links: currentDataset.links,
+      paths: currentDataset.paths,
       tlds: currentDataset.tlds,
       trustedSites: currentDataset.trustedSites,
       profile: currentDataset.profile

@@ -18,7 +18,7 @@ import { findBlockReason, hasScopedLinkRulesForUrl } from './blocker/matcher.js'
 import { findTimeRuleBlock, initializeTimeRuleTracking, sampleTimeRuleUsageNow } from './blocker/timers.js';
 import { expandWrappedWebUrls, extractWrappedTargetUrls, isUnsupportedArchiveUrl } from './blocker/url-wrappers.js';
 import { refreshTimeRulePrepaintRegistration } from './blocker/time-rule-prepaint-registration.js';
-import { findBlockedHost, initializeHosts } from './blocker/hosts.js';
+import { findBlockedHost, findHardBlockedHost, initializeHosts } from './blocker/hosts.js';
 import {
   downloadGitHubLists,
   getGitHubSyncStatus,
@@ -50,107 +50,17 @@ import {
 } from './blocker/shared.js';
 
 // ---------------------------------------------------------------------------
-// Immutable hardcoded link enforcement
+// Immutable fetched-host enforcement
 // ---------------------------------------------------------------------------
-// These rules are compiled directly into background.js in addition to
-// blocker/lists/blockedLinks.csv. Removing a matching row from the physical,
-// synchronized or imported CSV does not remove this enforcement layer.
-// TrustedSites.csv remains the explicit allow-list and is evaluated first.
-const HARD_CODED_LINKS = Object.freeze(
-[
-  "theredtool.com",
-  "lightxeditor.com",
-  "picwish.com",
-  "snapedit.app",
-  "snapedit.ai",
-  "twitter.com",
-  "x.com",
-  "ask.fm",
-  "tiktokcelebrities.com",
-  "photocut.ai",
-  "tiktokus.info",
-  "aitoolfor.org",
-  "reddit.com/r/BayleyBooty",
-  "xvideos.com/c/AI-239",
-  "xvideos.com?k=3d",
-  "xvideos.com?k=WWE",
-  "xvideos.com?k=TNA",
-  "xvideos.com?k=AEW",
-  "deepnude.to",
-  "nudify.me",
-  "deepnudeai.org",
-  "onlyfans.com",
-  "justforfans.com",
-  "fanso.io",
-  "okfans.com",
-  "sourceforge.net/projects/dreamtime.mirror",
-  "reddit.com/r/extramile",
-  "wrestlingffp.forumcommunity.net",
-  "xvideos.com?k=3d&top",
-  "xvideos.com?k=Stephanie+McMahon",
-  "remove.bg",
-  "removex.io",
-  "removebg.club",
-  "reddit.com/r/GeniusOfTheSky",
-  "starryai.com",
-  "undressher.app",
-  "nudifyonline.tech",
-  "vanice.ai",
-  "venice.ai",
-  "vanice-ai.com",
-  "venice-ai.com",
-  "venice-ai.net",
-  "venice-ai.org",
-  "vanice-ai.org",
-  "thesmackdownhotel.com/wrestlers/red-velvet",
-  "thesmackdownhotel.com/wrestlers/riho",
-  "thesmackdownhotel.com/wrestlers/ava-raine",
-  "thesmackdownhotel.com/wrestlers/delta",
-  "arxiv.org",
-  "ira-amanda.blogspot.com",
-  "ira-amanda.blogspot.fi",
-  "irpp4.blogspot.com",
-  "irpp4.blogspot.fi",
-  "perttas.blogspot.com",
-  "perttas.blogspot.fi",
-  "jiujau.blogspot.com",
-  "jiujau.blogspot.fi",
-  "multicorewareinc.com",
-  "gemini.google.com",
-  "user/3ws1lu2bwli971gvhv28yemrm",
-  "instagram.com/taijamaarit",
-  "instagram.com/emiliaaq96",
-  "upskirt.tv",
-  "celeb.gate.cc",
-  "pullpush.io",
-  "search.pullpush.io",
-  "search.yahoo.com",
-  "duckduckgo.com",
-  "celebgate.cc",
-  "bing.com",
-  "nubee.ai",
-  "tiktokwood.com",
-  "tiktok-for-business.co.jp",
-  "arvin.chat",
-  "xvideos.com?k=Tegan+Nox",
-  "insmind.com",
-  "picwish.ai",
-  "xvideos.com?k=Liv+Morgan",
-  "xvideos.com?k=Steph+McMahon",
-  "web.archive.org/web/20230913153255",
-  "microsoft.com/fi-fi/edge",
-  "explore.microsoft.com/fi-fi/edge",
-  "explore.microsoft.com/en-us/edge/download?form=MA14LQ&cs=3404660611",
-  "explore.microsoft.com"
-]
-);
+// The hard-denied host floor is loaded by blocker/hosts.js from the live
+// BraveFoxHosts and legacyFox sources. Their packaged copies are used only as
+// fallbacks when a live source cannot be loaded. Path/query-specific rules live
+// in blockedPaths.csv so live-list removals can take effect normally.
 
 const recentlyRedirected = new Map();
 const redirectInFlight = new Set();
 const redirectLandingBypass = new Map();
 const EXTENSION_ORIGIN = new URL(browser.runtime.getURL('/')).origin;
-const HARD_CODED_LINK_RULES = uniqueInOrder(HARD_CODED_LINKS, normalizeLinkForStorage);
-
 
 // The master Enabled toggle is intentionally a normal-window control only.
 // Focus Master uses manifest "incognito": "split", so the Incognito service
@@ -356,7 +266,7 @@ async function requireAdminAccess(sender) {
   return tabId;
 }
 
-function publicCounts(dataset) { return { termCount: dataset.terms.length, linkCount: dataset.links.length, tldCount: dataset.tlds.length, trustedSiteCount: dataset.trustedSites.length }; }
+function publicCounts(dataset) { return { termCount: dataset.terms.length, linkCount: dataset.links.length, pathCount: dataset.paths.length, tldCount: dataset.tlds.length, trustedSiteCount: dataset.trustedSites.length }; }
 
 function consoleClockTime() {
   return new Date().toLocaleTimeString([], {
@@ -373,11 +283,13 @@ function logLoadedBlocklists(dataset) {
   const termsFile = profile?.termsFile || 'blockedTerms.csv';
   const termCount = Array.isArray(dataset?.terms) ? dataset.terms.length : 0;
   const linkCount = Array.isArray(dataset?.links) ? dataset.links.length : 0;
+  const pathCount = Array.isArray(dataset?.paths) ? dataset.paths.length : 0;
   const tldCount = Array.isArray(dataset?.tlds) ? dataset.tlds.length : 0;
   const trustedCount = Array.isArray(dataset?.trustedSites) ? dataset.trustedSites.length : 0;
   console.log(
     `[${consoleClockTime()}] Focus Master lists loaded: ${termsFile} (${termCount} terms), ` +
-    `blockedLinks.csv (${linkCount} links + ${HARD_CODED_LINK_RULES.length} immutable), blockedTLDs.csv (${tldCount} TLDs), ` +
+    `blockedLinks.csv (${linkCount} links), blockedPaths.csv (${pathCount} paths), ` +
+    `blockedTLDs.csv (${tldCount} TLDs), ` +
     `TrustedSites.csv (${trustedCount} trusted rules) — profile ${profileLabel}`
   );
 }
@@ -424,6 +336,7 @@ async function fullState(sender) {
     ok: true,
     terms: dataset.terms,
     links: dataset.links,
+    paths: dataset.paths,
     tlds: dataset.tlds,
     trustedSites: dataset.trustedSites,
     profile: dataset.profile,
@@ -449,7 +362,7 @@ function sanitizeAdminPatch(patch) {
 }
 
 function normalizerForKind(kind) {
-  if (kind === 'links') return normalizeLinkForStorage;
+  if (kind === 'links' || kind === 'paths') return normalizeLinkForStorage;
   if (kind === 'tlds') return normalizeTldForStorage;
   if (kind === 'trustedSites') return normalizeTrustedSiteEntry;
   if (kind === 'terms') return normalizeTerm;
@@ -472,6 +385,7 @@ async function mutateDataset(kind, operation, payload) {
   const saved = await saveDataset({
     terms: kind === 'terms' ? next : dataset.terms,
     links: kind === 'links' ? next : dataset.links,
+    paths: kind === 'paths' ? next : dataset.paths,
     tlds: kind === 'tlds' ? next : dataset.tlds,
     trustedSites: kind === 'trustedSites' ? next : dataset.trustedSites,
     profile: dataset.profile
@@ -493,6 +407,7 @@ async function mutateDataset(kind, operation, payload) {
     changed: true,
     terms: saved.terms,
     links: saved.links,
+    paths: saved.paths,
     tlds: saved.tlds,
     trustedSites: saved.trustedSites,
     profile: saved.profile,
@@ -628,18 +543,20 @@ async function evaluateNavigation(tabId, url, title = '') {
     return;
   }
 
-  // Priority 1B: immutable built-in link rules are the hard-denied link floor.
-  // They are compiled into Focus Master, independent of blockedLinks.csv, and
-  // intentionally outrank both Time Rules and Trusted Sites. They still follow
-  // the master/link-blocking switches, just like the immutable floor did before.
-  const hardDeniedDataset = {
-    ...dataset,
-    terms: [],
-    tlds: [],
-    links: HARD_CODED_LINK_RULES
-  };
-  const hardDeniedReason = findBlockReason({ url, title }, hardDeniedDataset, settings);
-  if (hardDeniedReason) {
+  // Priority 1B: immutable fetched-host rules are the hard-denied host floor.
+  // BraveFoxHosts and legacyFox are fetched live by blocker/hosts.js, with their
+  // packaged copies used as offline fallbacks. This tier intentionally outranks
+  // both Time Rules and Trusted Sites while still following the master/link
+  // blocking switches.
+  let hardBlockedHost = '';
+  if (settings.enabled && settings.blockLinks) {
+    for (const candidateUrl of expandWrappedWebUrls(url)) {
+      hardBlockedHost = await findHardBlockedHost(candidateUrl);
+      if (hardBlockedHost) break;
+    }
+  }
+  if (hardBlockedHost) {
+    const hardDeniedReason = { type: 'link', trigger: hardBlockedHost, attemptedSearch: '' };
     redirectInFlight.add(tabId);
     recentlyRedirected.set(tabId, { url, at: Date.now() });
     try {
@@ -653,7 +570,7 @@ async function evaluateNavigation(tabId, url, title = '') {
       }
       try { await browser.history.deleteUrl({ url }); } catch {}
     } catch (error) {
-      console.warn('[BraveFox Focus Master] Hard-denied redirect failed:', error);
+      console.warn('[BraveFox Focus Master] Hard-denied host redirect failed:', error);
     } finally {
       redirectInFlight.delete(tabId);
     }
@@ -692,13 +609,9 @@ async function evaluateNavigation(tabId, url, title = '') {
     return;
   }
 
-  // Priority 4A: normal user-managed Blocker terms / links / TLDs.
-  // The immutable built-in link floor has already been enforced at Priority 1B,
+  // Priority 4A: normal user-managed Blocker terms / links / paths / TLDs.
+  // The immutable fetched-host floor has already been enforced at Priority 1B,
   // so the normal matcher uses only the synchronized/user-managed dataset here.
-  const effectiveDataset = {
-    ...dataset,
-    links: uniqueInOrder([...HARD_CODED_LINK_RULES, ...dataset.links], normalizeLinkForStorage)
-  };
   const reason = findBlockReason({ url, title }, dataset, settings);
   if (reason) {
     redirectInFlight.add(tabId);
@@ -727,7 +640,7 @@ async function evaluateNavigation(tabId, url, title = '') {
   // the corresponding candidate host instead of globally disabling host checks.
   let blockedHost = '';
   for (const candidateUrl of expandWrappedWebUrls(url)) {
-    if (settings.enabled && settings.blockLinks && hasScopedLinkRulesForUrl(candidateUrl, effectiveDataset.links)) continue;
+    if (settings.enabled && settings.blockLinks && hasScopedLinkRulesForUrl(candidateUrl, dataset.paths)) continue;
     blockedHost = await findBlockedHost(candidateUrl);
     if (blockedHost) break;
   }
@@ -898,11 +811,13 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const saved = await saveDataset({
           terms: message.terms,
           links: message.links,
+          paths: Array.isArray(message.paths) ? message.paths : current.paths,
           tlds: Array.isArray(message.tlds) ? message.tlds : current.tlds,
           trustedSites: Array.isArray(message.trustedSites) ? message.trustedSites : current.trustedSites,
           profile: current.profile
         });
         const snapshots = [queueRemoteSnapshot('terms'), queueRemoteSnapshot('links')];
+        if (Array.isArray(message.paths)) snapshots.push(queueRemoteSnapshot('paths'));
         if (Array.isArray(message.tlds)) snapshots.push(queueRemoteSnapshot('tlds'));
         if (Array.isArray(message.trustedSites)) snapshots.push(queueRemoteSnapshot('trustedSites'));
         await Promise.all(snapshots);
@@ -911,6 +826,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           ok: true,
           terms: saved.terms,
           links: saved.links,
+          paths: saved.paths,
           tlds: saved.tlds,
           trustedSites: saved.trustedSites,
           profile: saved.profile,
@@ -927,6 +843,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           ok: true,
           terms: result.dataset.terms,
           links: result.dataset.links,
+          paths: result.dataset.paths,
           tlds: result.dataset.tlds,
           trustedSites: result.dataset.trustedSites,
           profile: result.dataset.profile,
@@ -960,6 +877,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           ok: true,
           terms: result.dataset.terms,
           links: result.dataset.links,
+          paths: result.dataset.paths,
           tlds: result.dataset.tlds,
           trustedSites: result.dataset.trustedSites,
           profile: result.dataset.profile,
@@ -975,6 +893,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           ok: true,
           terms: result.dataset.terms,
           links: result.dataset.links,
+          paths: result.dataset.paths,
           tlds: result.dataset.tlds,
           trustedSites: result.dataset.trustedSites,
           profile: result.dataset.profile,

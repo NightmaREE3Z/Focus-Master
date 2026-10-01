@@ -11,7 +11,7 @@ import {
 } from './trusted-sites.js';
 
 function normalizerFor(kind) {
-  if (kind === 'links') return normalizeLinkForStorage;
+  if (kind === 'links' || kind === 'paths') return normalizeLinkForStorage;
   if (kind === 'tlds') return normalizeTldForStorage;
   if (kind === 'trustedSites') return normalizeTrustedSiteEntry;
   return normalizeTerm;
@@ -30,7 +30,7 @@ export function parseListText(text, kind) {
     .map(line => {
       // Firefox BlockSite exports one item per line. Its link importer also
       // tolerates semicolon-delimited rows, so keep only the first field.
-      if (kind === 'links' && line.includes(';')) return line.split(';', 1)[0].trim();
+      if ((kind === 'links' || kind === 'paths') && line.includes(';')) return line.split(';', 1)[0].trim();
       return line;
     });
 
@@ -45,13 +45,14 @@ export function serializeListForKind(values, kind) {
   return kind === 'trustedSites' ? serializeTrustedSitesCsv(values) : serializeListCsv(values);
 }
 
-export function serializeFullBackup({ terms, links, tlds, trustedSites, settings }) {
+export function serializeFullBackup({ terms, links, paths, tlds, trustedSites, settings }) {
   return JSON.stringify({
     format: 'bravefox-blocker-backup',
-    version: 2,
+    version: 3,
     exportedAt: new Date().toISOString(),
     terms: Array.isArray(terms) ? terms : [],
     links: Array.isArray(links) ? links : [],
+    paths: Array.isArray(paths) ? paths : [],
     tlds: Array.isArray(tlds) ? tlds : [],
     trustedSites: Array.isArray(trustedSites) ? trustedSites : [],
     settings: settings || {}
@@ -60,12 +61,15 @@ export function serializeFullBackup({ terms, links, tlds, trustedSites, settings
 
 export function parseFullBackup(text) {
   const parsed = JSON.parse(String(text ?? ''));
-  if (!parsed || parsed.format !== 'bravefox-blocker-backup' || ![1, 2].includes(Number(parsed.version))) {
+  if (!parsed || parsed.format !== 'bravefox-blocker-backup' || ![1, 2, 3].includes(Number(parsed.version))) {
     throw new Error('This is not a supported BraveFox Focus Master backup.');
   }
   return {
     terms: uniqueInOrder(parsed.terms, normalizeTerm),
     links: uniqueInOrder(parsed.links, normalizeLinkForStorage),
+    // Version 3 introduced the dedicated live blockedPaths.csv list. Older
+    // backups leave the current paths untouched instead of silently wiping it.
+    paths: Array.isArray(parsed.paths) ? uniqueInOrder(parsed.paths, normalizeLinkForStorage) : null,
     // Version 1 backups predate these lists. Null means “leave the current
     // list alone” so restoring an old backup cannot silently wipe newer rules.
     tlds: Array.isArray(parsed.tlds) ? uniqueInOrder(parsed.tlds, normalizeTldForStorage) : null,

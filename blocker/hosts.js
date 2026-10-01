@@ -2,16 +2,21 @@ import { browser } from './api.js';
 import { isCompletelyExcludedHostname, isCompletelyExcludedUrl } from './shared.js';
 
 const LOG_PREFIX = '[BraveFox Focus Master Hosts]';
-const META_KEY = 'bfb:hosts-meta:v1';
-const CHUNK_PREFIX = 'bfb:hosts-chunk:v1:';
+const HARD_META_KEY = 'bfb:hard-hosts-meta:v1';
+const HARD_CHUNK_PREFIX = 'bfb:hard-hosts-chunk:v1:';
+const META_KEY = 'bfb:hosts-meta:v2';
+const CHUNK_PREFIX = 'bfb:hosts-chunk:v2:';
 const ALARM_NAME = 'bfb-hosts-refresh';
 const CHUNK_SIZE = 5000;
-const SOURCES = [
+const HARD_SOURCES = [
   { id: 'BraveFoxHosts', url: 'https://raw.githubusercontent.com/NightmaREE3Z/Focus-Master/refs/heads/BraveFox/blocker/lists/BraveFoxHosts', fallbackPath: 'blocker/lists/BraveFoxHosts' },
-  { id: 'StevenBlack', url: 'https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews-porn/hosts' },
   { id: 'legacyFox', url: 'https://raw.githubusercontent.com/NightmaREE3Z/Focus-Master/refs/heads/BraveFox/blocker/lists/legacyFox', fallbackPath: 'blocker/lists/legacyFox' }
 ];
+const SOURCES = [
+  { id: 'StevenBlack', url: 'https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews-porn/hosts' }
+];
 
+let cachedHardHosts = null;
 let cachedHosts = null;
 let updatePromise = null;
 
@@ -42,44 +47,46 @@ async function fetchText(url) {
   return response.text();
 }
 
-async function fetchSource(source) {
+async function fetchRemoteSource(source) {
   try {
-    return parseHostsText(await fetchText(`${source.url}?bravefox_refresh=${Date.now()}`));
-  } catch (remoteError) {
-    if (!source.fallbackPath) {
-      console.warn(`${LOG_PREFIX} ${source.id} unavailable:`, remoteError);
-      return [];
-    }
-    try {
-      return parseHostsText(await fetchText(browser.runtime.getURL(source.fallbackPath)));
-    } catch (fallbackError) {
-      console.warn(`${LOG_PREFIX} ${source.id} remote and bundled fallback failed:`, fallbackError);
-      return [];
-    }
+    return { ok: true, values: parseHostsText(await fetchText(`${source.url}?bravefox_refresh=${Date.now()}`)) };
+  } catch (error) {
+    console.warn(`${LOG_PREFIX} ${source.id} unavailable:`, error);
+    return { ok: false, values: [] };
   }
 }
 
-async function saveHosts(hosts) {
+async function fetchBundledFallback(source) {
+  if (!source.fallbackPath) return { ok: false, values: [] };
+  try {
+    return { ok: true, values: parseHostsText(await fetchText(browser.runtime.getURL(source.fallbackPath))) };
+  } catch (error) {
+    console.warn(`${LOG_PREFIX} ${source.id} bundled fallback failed:`, error);
+    return { ok: false, values: [] };
+  }
+}
+
+async function saveHosts(hosts, metaKey = META_KEY, chunkPrefix = CHUNK_PREFIX) {
   const old = await browser.storage.local.get(null);
-  const oldKeys = Object.keys(old).filter(key => key.startsWith(CHUNK_PREFIX));
+  const oldKeys = Object.keys(old).filter(key => key.startsWith(chunkPrefix));
   const payload = {};
   let chunks = 0;
   for (let index = 0; index < hosts.length; index += CHUNK_SIZE) {
-    payload[`${CHUNK_PREFIX}${chunks}`] = hosts.slice(index, index + CHUNK_SIZE);
+    payload[`${chunkPrefix}${chunks}`] = hosts.slice(index, index + CHUNK_SIZE);
     chunks += 1;
   }
-  payload[META_KEY] = { chunks, count: hosts.length, updatedAt: Date.now() };
+  payload[metaKey] = { chunks, count: hosts.length, updatedAt: Date.now() };
   await browser.storage.local.set(payload);
   const keep = new Set(Object.keys(payload));
   const stale = oldKeys.filter(key => !keep.has(key));
   if (stale.length) await browser.storage.local.remove(stale);
 }
 
-async function loadHosts() {
-  const metaResult = await browser.storage.local.get(META_KEY);
-  const meta = metaResult[META_KEY];
+async function loadHosts(metaKey = META_KEY, chunkPrefix = CHUNK_PREFIX) {
+  const metaResult = await browser.storage.local.get(metaKey);
+  const meta = metaResult[metaKey];
   if (!meta?.chunks) return [];
-  const keys = Array.from({ length: Number(meta.chunks) }, (_, index) => `${CHUNK_PREFIX}${index}`);
+  const keys = Array.from({ length: Number(meta.chunks) }, (_, index) => `${chunkPrefix}${index}`);
   const data = await browser.storage.local.get(keys);
   const hosts = [];
   for (const key of keys) {
@@ -88,33 +95,63 @@ async function loadHosts() {
   return hosts;
 }
 
+async function updateSourceGroup(sources, existing, metaKey, chunkPrefix, label, required = true, respectTrusted = true) {
+  const seen = new Set();
+  let failed = false;
+  for (const source of sources) {
+    let result = await fetchRemoteSource(source);
+    if (!result.ok && !existing.length) result = await fetchBundledFallback(source);
+    if (!result.ok) {
+      failed = true;
+      continue;
+    }
+    for (const host of result.values) {
+      if ((!respectTrusted || !isCompletelyExcludedHostname(host)) && !seen.has(host)) seen.add(host);
+    }
+  }
+  if (failed && existing.length) {
+    console.warn(`${LOG_PREFIX} ${label} refresh was incomplete; keeping the previous cached set.`);
+    return existing;
+  }
+  if (!seen.size) {
+    if (failed && required) throw new Error(`No ${label} hosts source or bundled fallback could be loaded.`);
+    await saveHosts([], metaKey, chunkPrefix);
+    return [];
+  }
+  const hosts = [...seen].sort();
+  await saveHosts(hosts, metaKey, chunkPrefix);
+  return hosts;
+}
+
 export async function updateHosts() {
   if (updatePromise) return updatePromise;
   updatePromise = (async () => {
-    const seen = new Set();
-    for (const source of SOURCES) {
-      const values = await fetchSource(source);
-      for (const host of values) {
-        if (!isCompletelyExcludedHostname(host) && !seen.has(host)) seen.add(host);
-      }
-    }
-    if (!seen.size) {
-      const existing = cachedHosts || await loadHosts();
-      if (existing.length) return existing;
-      throw new Error('No hosts source or bundled fallback could be loaded.');
-    }
-    const hosts = [...seen].sort();
-    await saveHosts(hosts);
-    cachedHosts = hosts;
-    return hosts;
+    const existingHardHosts = cachedHardHosts || await loadHosts(HARD_META_KEY, HARD_CHUNK_PREFIX);
+    const existingHosts = cachedHosts || await loadHosts();
+    cachedHardHosts = await updateSourceGroup(HARD_SOURCES, existingHardHosts, HARD_META_KEY, HARD_CHUNK_PREFIX, 'hard-block', true, false);
+    cachedHosts = await updateSourceGroup(SOURCES, existingHosts, META_KEY, CHUNK_PREFIX, 'supplemental', false);
+    return { hardHosts: cachedHardHosts, hosts: cachedHosts };
   })().finally(() => { updatePromise = null; });
   return updatePromise;
+}
+
+async function ensureHardHosts() {
+  if (cachedHardHosts) return cachedHardHosts;
+  cachedHardHosts = await loadHosts(HARD_META_KEY, HARD_CHUNK_PREFIX);
+  if (!cachedHardHosts.length) {
+    await updateHosts();
+    cachedHardHosts = cachedHardHosts || [];
+  }
+  return cachedHardHosts;
 }
 
 async function ensureHosts() {
   if (cachedHosts) return cachedHosts;
   cachedHosts = await loadHosts();
-  if (!cachedHosts.length) cachedHosts = await updateHosts();
+  if (!cachedHosts.length) {
+    await updateHosts();
+    cachedHosts = cachedHosts || [];
+  }
   return cachedHosts;
 }
 
@@ -129,12 +166,11 @@ function binaryHas(sorted, value) {
   return false;
 }
 
-export async function findBlockedHost(urlValue) {
-  if (isCompletelyExcludedUrl(urlValue)) return '';
+async function findBlockedHostInList(urlValue, hosts, respectTrusted = true) {
+  if (respectTrusted && isCompletelyExcludedUrl(urlValue)) return '';
   let host;
   try { host = normalizeHost(new URL(String(urlValue || '')).hostname); } catch { return ''; }
   if (!host) return '';
-  const hosts = await ensureHosts();
   const labels = host.split('.');
   for (let index = 0; index < labels.length - 1; index += 1) {
     const candidate = labels.slice(index).join('.');
@@ -143,7 +179,16 @@ export async function findBlockedHost(urlValue) {
   return '';
 }
 
+export async function findHardBlockedHost(urlValue) {
+  return findBlockedHostInList(urlValue, await ensureHardHosts(), false);
+}
+
+export async function findBlockedHost(urlValue) {
+  return findBlockedHostInList(urlValue, await ensureHosts());
+}
+
 export async function initializeHosts() {
+  try { cachedHardHosts = await loadHosts(HARD_META_KEY, HARD_CHUNK_PREFIX); } catch {}
   try { cachedHosts = await loadHosts(); } catch {}
   browser.alarms.create(ALARM_NAME, { periodInMinutes: 60 });
   void updateHosts().catch(error => console.warn(`${LOG_PREFIX} Refresh failed; cached/bundled hosts remain active:`, error));

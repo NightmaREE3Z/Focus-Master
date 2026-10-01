@@ -20,6 +20,7 @@ const state = {
   view: 'terms',
   terms: [],
   links: [],
+  paths: [],
   tlds: [],
   trustedSites: [],
   trustedSiteFilter: 'domain',
@@ -92,7 +93,7 @@ function currentSingleKind() {
 }
 
 function normalizerForKind(kind) {
-  if (kind === 'links') return normalizeLinkForStorage;
+  if (kind === 'links' || kind === 'paths') return normalizeLinkForStorage;
   if (kind === 'tlds') return normalizeTldForStorage;
   if (kind === 'trustedSites') return normalizeTrustedSiteEntry;
   return normalizeTerm;
@@ -101,6 +102,7 @@ function normalizerForKind(kind) {
 function kindLabel(kind, count = 1) {
   const plural = count === 1 ? '' : 's';
   if (kind === 'links') return `link${plural}`;
+  if (kind === 'paths') return `path rule${plural}`;
   if (kind === 'tlds') return `TLD${plural}`;
   if (kind === 'trustedSites') return `trusted site rule${plural}`;
   return `term${plural}`;
@@ -108,13 +110,14 @@ function kindLabel(kind, count = 1) {
 
 function exportNameForKind(kind) {
   if (kind === 'links') return 'BraveFox-Blocker-Links.csv';
+  if (kind === 'paths') return 'BraveFox-Blocker-Paths.csv';
   if (kind === 'tlds') return 'BraveFox-Blocker-TLDs.csv';
   if (kind === 'trustedSites') return 'BraveFox-TrustedSites.csv';
   return 'BraveFox-Blocker-Terms.csv';
 }
 
 function displayEntry(kind, value) {
-  if (kind !== 'trustedSites') return { text: value, badge: kind === 'links' ? 'LINK' : kind === 'tlds' ? 'TLD' : '', badgeClass: kind };
+  if (kind !== 'trustedSites') return { text: value, badge: kind === 'links' ? 'LINK' : kind === 'paths' ? 'PATH' : kind === 'tlds' ? 'TLD' : '', badgeClass: kind };
   const descriptor = parseTrustedSiteEntry(value);
   if (!descriptor) return { text: value, badge: 'RULE', badgeClass: 'domain' };
   return {
@@ -130,6 +133,7 @@ function displayEntry(kind, value) {
 function applyResponse(response) {
   if (Array.isArray(response.terms)) state.terms = response.terms;
   if (Array.isArray(response.links)) state.links = response.links;
+  if (Array.isArray(response.paths)) state.paths = response.paths;
   if (Array.isArray(response.tlds)) state.tlds = response.tlds;
   if (Array.isArray(response.trustedSites)) state.trustedSites = response.trustedSites;
   if (response.profile === 'haukkis' || response.profile === 'tapsa') {
@@ -199,10 +203,11 @@ function updateTrustedTypeFilterUi() {
 
 function renderCounts() {
   if (elements.termCount) elements.termCount.textContent = state.terms.length;
-  if (elements.linkTldCount) elements.linkTldCount.textContent = state.links.length + state.tlds.length;
+  if (elements.linkTldCount) elements.linkTldCount.textContent = state.links.length + state.paths.length + state.tlds.length;
   if (elements.dailyLimitCount) elements.dailyLimitCount.textContent = (Array.isArray(state.settings.scheduledRules) ? state.settings.scheduledRules.length : 0) + (Array.isArray(state.settings.quotaRules) ? state.settings.quotaRules.length : 0);
   if (elements.trustedSiteCount) elements.trustedSiteCount.textContent = state.trustedSites.length;
   if (elements.linkSectionCount) elements.linkSectionCount.textContent = state.links.length;
+  if (elements.pathSectionCount) elements.pathSectionCount.textContent = state.paths.length;
   if (elements.tldSectionCount) elements.tldSectionCount.textContent = state.tlds.length;
   updateTrustedTypeFilterUi();
 }
@@ -282,6 +287,7 @@ function renderSingleList() {
 
 function renderSplitLists() {
   renderListInto('links', elements.linkSearchInput, elements.linkItems, elements.linkEmptyState);
+  renderListInto('paths', elements.pathSearchInput, elements.pathItems, elements.pathEmptyState);
   renderListInto('tlds', elements.tldSearchInput, elements.tldItems, elements.tldEmptyState);
 }
 
@@ -313,8 +319,8 @@ function selectView(view) {
     elements.searchInput.placeholder = 'Search the list';
     elements.singleListOrderNote.textContent = 'Order follows the CSV. Merge imports append new unique entries; manual additions go to the end.';
   } else if (view === 'links') {
-    elements.viewTitle.textContent = 'Blocked links / TLDs';
-    elements.viewSubtitle.textContent = 'Keep exact URL rules separate from hostname-suffix TLD rules.';
+    elements.viewTitle.textContent = 'Blocked links / paths / TLDs';
+    elements.viewSubtitle.textContent = 'Keep whole-host blocks, surgical URL rules and hostname-suffix rules separate.';
   } else if (view === 'dailyLimits') {
     elements.viewTitle.textContent = 'Daily Limits';
     elements.viewSubtitle.textContent = 'Schedule blocks and limit daily focused-use time per Focus Master profile.';
@@ -554,7 +560,7 @@ function syncStatusText(sync = state.githubSync) {
   lines.push(`Pending changes: ${Number(sync.pendingCount) || 0}`);
   if (sync.lastSyncAt) lines.push(`Last sync: ${new Date(sync.lastSyncAt).toLocaleString()} — ${sync.lastAction || 'completed'}`);
   else lines.push('Last sync: never');
-  lines.push('Global lists: blockedLinks.csv + blockedTLDs.csv + TrustedSites.csv');
+  lines.push('Global lists: blockedLinks.csv + blockedPaths.csv + blockedTLDs.csv + TrustedSites.csv');
   if (sync.suggestedProfileLabel) lines.push(`Detected browser account suggests ${sync.suggestedProfileLabel}.`);
   if (sync.lastError) lines.push(`Last error: ${sync.lastError}`);
   return lines.join('\n');
@@ -592,10 +598,12 @@ async function refreshGithubSyncStatus() {
   const files = response.githubSync.target?.files;
   if (files?.terms?.rawUrl && elements.termsRawLink) elements.termsRawLink.href = files.terms.rawUrl;
   if (files?.links?.rawUrl && elements.linksRawLink) elements.linksRawLink.href = files.links.rawUrl;
+  if (files?.paths?.rawUrl && elements.pathsRawLink) elements.pathsRawLink.href = files.paths.rawUrl;
   if (files?.tlds?.rawUrl && elements.tldsRawLink) elements.tldsRawLink.href = files.tlds.rawUrl;
   if (files?.trustedSites?.rawUrl && elements.trustedSitesRawLink) elements.trustedSitesRawLink.href = files.trustedSites.rawUrl;
   if (files?.terms?.path && elements.termsRawLink) elements.termsRawLink.textContent = files.terms.path.split('/').pop();
   if (files?.links?.path && elements.linksRawLink) elements.linksRawLink.textContent = files.links.path.split('/').pop();
+  if (files?.paths?.path && elements.pathsRawLink) elements.pathsRawLink.textContent = files.paths.path.split('/').pop();
   if (files?.tlds?.path && elements.tldsRawLink) elements.tldsRawLink.textContent = files.tlds.path.split('/').pop();
   if (files?.trustedSites?.path && elements.trustedSitesRawLink) elements.trustedSitesRawLink.textContent = files.trustedSites.path.split('/').pop();
   renderGithubSyncDialogStatus(response.githubSync);
@@ -674,7 +682,7 @@ async function runGithubAction(button, action) {
   try {
     if (action === 'upload') {
       await saveGithubSettings({ requireConsent: true });
-    } else if (!window.confirm(`Download ${state.githubSync?.activeProfileLabel || 'the selected profile'} terms plus the global links, TLDs and trusted sites from GitHub and replace the current local lists?`)) {
+    } else if (!window.confirm(`Download ${state.githubSync?.activeProfileLabel || 'the selected profile'} terms plus the global links, paths, TLDs and trusted sites from GitHub and replace the current local lists?`)) {
       return;
     }
 
@@ -815,7 +823,7 @@ function bindAdminControls() {
     redirectLinksToggle: $('#redirectLinksToggle'), redirectLinksUrlInput: $('#redirectLinksUrlInput'),
     saveLinkRedirectButton: $('#saveLinkRedirectButton'), clearLinkRedirectButton: $('#clearLinkRedirectButton'),
     lockAdminButton: $('#lockAdminButton'), exportBackupButton: $('#exportBackupButton'), importBackupButton: $('#importBackupButton'),
-    exportTermsButton: $('#exportTermsButton'), exportLinksButton: $('#exportLinksButton'), exportTldsButton: $('#exportTldsButton'),
+    exportTermsButton: $('#exportTermsButton'), exportLinksButton: $('#exportLinksButton'), exportPathsButton: $('#exportPathsButton'), exportTldsButton: $('#exportTldsButton'),
     exportTrustedSitesButton: $('#exportTrustedSitesButton'), backupInput: $('#backupInput')
   });
 
@@ -879,6 +887,9 @@ function bindAdminControls() {
   elements.exportLinksButton.addEventListener('click', () => {
     downloadText('BraveFox-Blocker-Links.csv', serializeListCsv(state.links), 'text/csv;charset=utf-8');
   });
+  elements.exportPathsButton.addEventListener('click', () => {
+    downloadText('BraveFox-Blocker-Paths.csv', serializeListCsv(state.paths), 'text/csv;charset=utf-8');
+  });
   elements.exportTldsButton.addEventListener('click', () => {
     downloadText('BraveFox-Blocker-TLDs.csv', serializeListForKind(state.tlds, 'tlds'), 'text/csv;charset=utf-8');
   });
@@ -892,9 +903,10 @@ function bindAdminControls() {
     if (!file) return;
     try {
       const backup = parseFullBackup(await file.text());
+      const pathSummary = Array.isArray(backup.paths) ? `${backup.paths.length} path rules` : 'keep current path rules';
       const tldSummary = Array.isArray(backup.tlds) ? `${backup.tlds.length} TLDs` : 'keep current TLDs';
       const trustedSummary = Array.isArray(backup.trustedSites) ? `${backup.trustedSites.length} trusted rules` : 'keep current trusted rules';
-      if (!window.confirm(`Restore ${backup.terms.length} ordered terms, ${backup.links.length} ordered links, ${tldSummary}, ${trustedSummary} and protected settings?`)) return;
+      if (!window.confirm(`Restore ${backup.terms.length} ordered terms, ${backup.links.length} ordered links, ${pathSummary}, ${tldSummary}, ${trustedSummary} and protected settings?`)) return;
       const response = await message({ type: MESSAGE.replaceAll, ...backup }, { redirectOnLock: false });
       applyResponse(response);
       renderCounts();
@@ -957,13 +969,15 @@ function bindListEditor({ kind, addInput, addButton, searchInput, importMode, im
 function bind() {
   Object.assign(elements, {
     app: $('#app'), termCount: $('#termCount'), linkTldCount: $('#linkTldCount'), dailyLimitCount: $('#dailyLimitCount'), trustedSiteCount: $('#trustedSiteCount'),
-    linkSectionCount: $('#linkSectionCount'), tldSectionCount: $('#tldSectionCount'),
+    linkSectionCount: $('#linkSectionCount'), pathSectionCount: $('#pathSectionCount'), tldSectionCount: $('#tldSectionCount'),
     viewTitle: $('#viewTitle'), viewSubtitle: $('#viewSubtitle'), singleListView: $('#singleListView'), linksTldsView: $('#linksTldsView'), dailyLimitsView: $('#dailyLimitsView'), settingsView: $('#settingsView'),
     trustedTypeBar: $('#trustedTypeBar'), trustedTypeFilter: $('#trustedTypeFilter'),
     addInput: $('#addInput'), addButton: $('#addButton'), searchInput: $('#searchInput'), importMode: $('#importMode'),
     importButton: $('#importButton'), exportButton: $('#exportButton'), fileInput: $('#fileInput'), items: $('#items'), emptyState: $('#emptyState'), singleListOrderNote: $('#singleListOrderNote'),
     addLinkInput: $('#addLinkInput'), addLinkButton: $('#addLinkButton'), linkSearchInput: $('#linkSearchInput'), linkImportMode: $('#linkImportMode'),
     linkImportButton: $('#linkImportButton'), linkExportButton: $('#linkExportButton'), linkFileInput: $('#linkFileInput'), linkItems: $('#linkItems'), linkEmptyState: $('#linkEmptyState'),
+    addPathInput: $('#addPathInput'), addPathButton: $('#addPathButton'), pathSearchInput: $('#pathSearchInput'), pathImportMode: $('#pathImportMode'),
+    pathImportButton: $('#pathImportButton'), pathExportButton: $('#pathExportButton'), pathFileInput: $('#pathFileInput'), pathItems: $('#pathItems'), pathEmptyState: $('#pathEmptyState'),
     addTldInput: $('#addTldInput'), addTldButton: $('#addTldButton'), tldSearchInput: $('#tldSearchInput'), tldImportMode: $('#tldImportMode'),
     tldImportButton: $('#tldImportButton'), tldExportButton: $('#tldExportButton'), tldFileInput: $('#tldFileInput'), tldItems: $('#tldItems'), tldEmptyState: $('#tldEmptyState'),
     dailyLimitsLocked: $('#dailyLimitsLocked'), dailyLimitsUnlockForm: $('#dailyLimitsUnlockForm'), dailyLimitsPasswordInput: $('#dailyLimitsPasswordInput'),
@@ -972,7 +986,7 @@ function bind() {
     adminUnlockButton: $('#adminUnlockButton'), adminError: $('#adminError'), adminControlsMount: $('#adminControlsMount'),
     lockButton: $('#lockButton'), toast: $('#toast'), syncLabel: $('#syncLabel'), syncDialog: $('#syncDialog'),
     closeSyncDialog: $('#closeSyncDialog'), githubTokenInput: $('#githubTokenInput'), tokenRecoveryToggle: $('#tokenRecoveryToggle'), automaticSyncToggle: $('#automaticSyncToggle'),
-    clearGithubToken: $('#clearGithubToken'), githubSyncStatus: $('#githubSyncStatus'), termsRawLink: $('#termsRawLink'), linksRawLink: $('#linksRawLink'),
+    clearGithubToken: $('#clearGithubToken'), githubSyncStatus: $('#githubSyncStatus'), termsRawLink: $('#termsRawLink'), linksRawLink: $('#linksRawLink'), pathsRawLink: $('#pathsRawLink'),
     tldsRawLink: $('#tldsRawLink'), trustedSitesRawLink: $('#trustedSitesRawLink'), syncProfileSelect: $('#syncProfileSelect'), syncProfileHelp: $('#syncProfileHelp'), detectedProfileStatus: $('#detectedProfileStatus'),
     saveGithubSyncSettings: $('#saveGithubSyncSettings'), downloadFromGithub: $('#downloadFromGithub'), uploadToGithub: $('#uploadToGithub')
   });
@@ -1029,6 +1043,11 @@ function bind() {
     kind: 'links', addInput: elements.addLinkInput, addButton: elements.addLinkButton,
     searchInput: elements.linkSearchInput, importMode: elements.linkImportMode,
     importButton: elements.linkImportButton, exportButton: elements.linkExportButton, fileInput: elements.linkFileInput
+  });
+  bindListEditor({
+    kind: 'paths', addInput: elements.addPathInput, addButton: elements.addPathButton,
+    searchInput: elements.pathSearchInput, importMode: elements.pathImportMode,
+    importButton: elements.pathImportButton, exportButton: elements.pathExportButton, fileInput: elements.pathFileInput
   });
   bindListEditor({
     kind: 'tlds', addInput: elements.addTldInput, addButton: elements.addTldButton,

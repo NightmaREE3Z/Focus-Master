@@ -388,6 +388,8 @@ export function findBlockReason({ url, title = '' }, dataset, settings) {
     if (tld) return { type: 'tld', trigger: tld, attemptedSearch: '' };
     const link = matchLink(url, dataset.links);
     if (link) return { type: 'link', trigger: link, attemptedSearch: extractAttemptedSearch(url) };
+    const path = matchLink(url, dataset.paths);
+    if (path) return { type: 'link', trigger: path, attemptedSearch: extractAttemptedSearch(url) };
   }
   if (settings.blockTerms) {
     const term = matchTerm({ url, title }, dataset.terms);

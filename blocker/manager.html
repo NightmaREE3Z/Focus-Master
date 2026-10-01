@@ -21,7 +21,7 @@
     </div>
     <nav aria-label="Focus Master sections">
       <button class="nav-button active" data-view="terms">Blocked Terms <span id="termCount">0</span></button>
-      <button class="nav-button" data-view="links">Links / TLDs <span id="linkTldCount">0</span></button>
+      <button class="nav-button" data-view="links">Links / Paths / TLDs <span id="linkTldCount">0</span></button>
       <button class="nav-button" data-view="dailyLimits">Daily Limits <span id="dailyLimitCount">0</span></button>
       <button class="nav-button" data-view="trustedSites">Trusted Sites <span id="trustedSiteCount">0</span></button>
       <button class="nav-button" data-view="settings">Settings</button>
@@ -78,12 +78,12 @@
         <header class="subpanel-heading">
           <div>
             <h2>Blocked links</h2>
-            <p>Domains, URL paths and query-specific rules.</p>
+            <p>Whole domains and hostnames.</p>
           </div>
           <span id="linkSectionCount" class="count-pill">0</span>
         </header>
         <div class="add-row">
-          <input id="addLinkInput" type="text" autocomplete="off" placeholder="Add a domain or URL">
+          <input id="addLinkInput" type="text" autocomplete="off" placeholder="Add a domain or hostname">
           <button id="addLinkButton" class="primary-button">Add link</button>
         </div>
         <div class="toolbar">
@@ -97,9 +97,37 @@
           <button id="linkExportButton" class="secondary-button">Export CSV</button>
           <input id="linkFileInput" type="file" accept=".csv,.txt,text/csv,text/plain" hidden>
         </div>
-        <p class="order-note">Link rules are matched structurally against host, path and any query fields stored in the rule.</p>
+        <p class="order-note">Link rules are intended for whole-domain or whole-host blocking. Surgical URL rules belong in blockedPaths.csv.</p>
         <div id="linkEmptyState" class="empty-state" hidden>No blocked links yet.</div>
         <div id="linkItems" class="items" role="list"></div>
+      </article>
+
+      <article class="panel list-subpanel">
+        <header class="subpanel-heading">
+          <div>
+            <h2>Blocked paths</h2>
+            <p>Path- and query-specific rules that can be edited live.</p>
+          </div>
+          <span id="pathSectionCount" class="count-pill">0</span>
+        </header>
+        <div class="add-row">
+          <input id="addPathInput" type="text" autocomplete="off" placeholder="Add a URL path or query rule">
+          <button id="addPathButton" class="primary-button">Add path</button>
+        </div>
+        <div class="toolbar">
+          <input id="pathSearchInput" type="search" placeholder="Search blocked paths">
+          <span class="toolbar-spacer"></span>
+          <select id="pathImportMode" aria-label="Blocked paths import mode">
+            <option value="merge">Merge import</option>
+            <option value="replace">Replace paths</option>
+          </select>
+          <button id="pathImportButton" class="secondary-button">Import CSV</button>
+          <button id="pathExportButton" class="secondary-button">Export CSV</button>
+          <input id="pathFileInput" type="file" accept=".csv,.txt,text/csv,text/plain" hidden>
+        </div>
+        <p class="order-note">Path rules are matched structurally against the stored host, path and query. Host-only entries are still accepted if you intentionally keep one here.</p>
+        <div id="pathEmptyState" class="empty-state" hidden>No blocked paths yet.</div>
+        <div id="pathItems" class="items" role="list"></div>
       </article>
 
       <article class="panel list-subpanel">
@@ -177,7 +205,7 @@
       <header class="sync-dialog-header">
         <div>
           <h2 id="syncDialogTitle">GitHub Blocklist Sync</h2>
-          <p>Synchronize blocked terms, links, TLDs and trusted sites between Chrome, Firefox PC and Firefox Android.</p>
+          <p>Synchronize blocked terms, links, paths, TLDs and trusted sites between Chrome, Firefox PC and Firefox Android.</p>
         </div>
         <button id="closeSyncDialog" class="dialog-close" type="button" aria-label="Close sync dialog">×</button>
       </header>
@@ -188,6 +216,7 @@
         <div class="sync-link-list">
           <a id="termsRawLink" target="_blank" rel="noreferrer">blockedTerms.csv</a>
           <a id="linksRawLink" target="_blank" rel="noreferrer">blockedLinks.csv</a>
+          <a id="pathsRawLink" target="_blank" rel="noreferrer">blockedPaths.csv</a>
           <a id="tldsRawLink" target="_blank" rel="noreferrer">blockedTLDs.csv</a>
           <a id="trustedSitesRawLink" target="_blank" rel="noreferrer">TrustedSites.csv</a>
         </div>
@@ -200,7 +229,7 @@
           <option value="haukkis">Haukkis — blockedTerms.csv</option>
           <option value="tapsa">Tapsa — blockedTermsDad.csv</option>
         </select>
-        <p id="syncProfileHelp" class="field-help">Blocked links, TLDs and TrustedSites.csv are global. Changing profile does not replace the current terms until you manually Download or Upload.</p>
+        <p id="syncProfileHelp" class="field-help">Blocked links, paths, TLDs and TrustedSites.csv are global. Changing profile does not replace the current terms until you manually Download or Upload.</p>
         <p id="detectedProfileStatus" class="field-help" aria-live="polite"></p>
       </section>
 
@@ -211,7 +240,7 @@
         <label class="checkbox-line sync-auto-line"><input id="tokenRecoveryToggle" type="checkbox" checked> Keep a clean-install recovery copy in Google Drive</label>
         <p class="field-help">On Save, an approved Chrome profile account can authorize this extension to keep its own hidden recovery record in Google Drive app data. After a clean reinstall, the same account can restore it automatically. Other accounts and unsigned profiles never receive it.</p>
         <label class="checkbox-line sync-auto-line"><input id="automaticSyncToggle" type="checkbox" checked> Automatic Sync</label>
-        <p class="field-help">Checks every 15 minutes and shortly after changes. Terms use the selected Sync Profile; links, TLDs and TrustedSites.csv are global and synchronize both ways.</p>
+        <p class="field-help">Checks every 15 minutes and shortly after changes. Terms use the selected Sync Profile; links, paths, TLDs and TrustedSites.csv are global and synchronize both ways.</p>
         <button id="clearGithubToken" class="secondary-button danger-lite" type="button">Forget saved token</button>
       </section>
 
@@ -345,12 +374,13 @@
 
   <section class="setting-card">
     <h2>Backup</h2>
-    <p>CSV exports preserve list order. JSON stores all four ordered lists and all protected settings.</p>
+    <p>CSV exports preserve list order. JSON stores all five ordered lists and all protected settings.</p>
     <div class="button-row wrap-buttons">
       <button id="importBackupButton" class="secondary-button" type="button">Restore full JSON</button>
       <button id="exportBackupButton" class="secondary-button" type="button">Export full JSON</button>
       <button id="exportTermsButton" class="secondary-button" type="button">Export Terms</button>
       <button id="exportLinksButton" class="secondary-button" type="button">Export Links</button>
+      <button id="exportPathsButton" class="secondary-button" type="button">Export Paths</button>
       <button id="exportTldsButton" class="secondary-button" type="button">Export TLDs</button>
       <button id="exportTrustedSitesButton" class="secondary-button" type="button">Export Trusted Sites</button>
       <input id="backupInput" type="file" accept=".json,application/json" hidden>
