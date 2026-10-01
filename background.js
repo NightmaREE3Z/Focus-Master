@@ -50,17 +50,108 @@ import {
 } from './blocker/shared.js';
 
 // ---------------------------------------------------------------------------
-// Immutable fetched-host enforcement
+// Immutable hardcoded link enforcement
 // ---------------------------------------------------------------------------
-// The hard-denied host floor is loaded by blocker/hosts.js from the live
-// BraveFoxHosts and legacyFox sources. Their packaged copies are used only as
-// fallbacks when a live source cannot be loaded. Path/query-specific rules live
-// in blockedPaths.csv so live-list removals can take effect normally.
+// These rules are compiled directly into background.js in addition to
+// blocker/lists/blockedLinks.csv. Removing a matching row from the physical,
+// synchronized or imported CSV does not remove this enforcement layer.
+// TrustedSites.csv cannot bypass this immutable shield. BraveFoxHosts +
+// legacyFox provide a second remotely maintained hard-host shield below it.
+const HARD_CODED_LINKS = Object.freeze(
+[
+  "theredtool.com",
+  "lightxeditor.com",
+  "picwish.com",
+  "snapedit.app",
+  "snapedit.ai",
+  "twitter.com",
+  "x.com",
+  "ask.fm",
+  "tiktokcelebrities.com",
+  "photocut.ai",
+  "tiktokus.info",
+  "aitoolfor.org",
+  "reddit.com/r/BayleyBooty",
+  "xvideos.com/c/AI-239",
+  "xvideos.com?k=3d",
+  "xvideos.com?k=WWE",
+  "xvideos.com?k=TNA",
+  "xvideos.com?k=AEW",
+  "deepnude.to",
+  "nudify.me",
+  "deepnudeai.org",
+  "onlyfans.com",
+  "justforfans.com",
+  "fanso.io",
+  "okfans.com",
+  "sourceforge.net/projects/dreamtime.mirror",
+  "reddit.com/r/extramile",
+  "wrestlingffp.forumcommunity.net",
+  "xvideos.com?k=3d&top",
+  "xvideos.com?k=Stephanie+McMahon",
+  "remove.bg",
+  "removex.io",
+  "removebg.club",
+  "reddit.com/r/GeniusOfTheSky",
+  "starryai.com",
+  "undressher.app",
+  "nudifyonline.tech",
+  "vanice.ai",
+  "venice.ai",
+  "vanice-ai.com",
+  "venice-ai.com",
+  "venice-ai.net",
+  "venice-ai.org",
+  "vanice-ai.org",
+  "thesmackdownhotel.com/wrestlers/red-velvet",
+  "thesmackdownhotel.com/wrestlers/riho",
+  "thesmackdownhotel.com/wrestlers/ava-raine",
+  "thesmackdownhotel.com/wrestlers/delta",
+  "arxiv.org",
+  "ira-amanda.blogspot.com",
+  "ira-amanda.blogspot.fi",
+  "irpp4.blogspot.com",
+  "irpp4.blogspot.fi",
+  "perttas.blogspot.com",
+  "perttas.blogspot.fi",
+  "jiujau.blogspot.com",
+  "jiujau.blogspot.fi",
+  "multicorewareinc.com",
+  "gemini.google.com",
+  "user/3ws1lu2bwli971gvhv28yemrm",
+  "instagram.com/taijamaarit",
+  "instagram.com/emiliaaq96",
+  "upskirt.tv",
+  "celeb.gate.cc",
+  "pullpush.io",
+  "search.pullpush.io",
+  "search.yahoo.com",
+  "duckduckgo.com",
+  "celebgate.cc",
+  "bing.com",
+  "nubee.ai",
+  "tiktokwood.com",
+  "tiktok-for-business.co.jp",
+  "arvin.chat",
+  "xvideos.com?k=Tegan+Nox",
+  "insmind.com",
+  "picwish.ai",
+  "xvideos.com?k=Liv+Morgan",
+  "xvideos.com?k=Steph+McMahon",
+  "web.archive.org/web/20230913153255",
+  "microsoft.com/fi-fi/edge",
+  "explore.microsoft.com/fi-fi/edge",
+  "explore.microsoft.com/en-us/edge/download?form=MA14LQ&cs=3404660611",
+  "explore.microsoft.com"
+]
+);
 
 const recentlyRedirected = new Map();
 const redirectInFlight = new Set();
 const redirectLandingBypass = new Map();
 const EXTENSION_ORIGIN = new URL(browser.runtime.getURL('/')).origin;
+const HARD_CODED_LINK_RULES = uniqueInOrder(HARD_CODED_LINKS, normalizeLinkForStorage);
+
 
 // The master Enabled toggle is intentionally a normal-window control only.
 // Focus Master uses manifest "incognito": "split", so the Incognito service
@@ -543,20 +634,19 @@ async function evaluateNavigation(tabId, url, title = '') {
     return;
   }
 
-  // Priority 1B: immutable fetched-host rules are the hard-denied host floor.
-  // BraveFoxHosts and legacyFox are fetched live by blocker/hosts.js, with their
-  // packaged copies used as offline fallbacks. This tier intentionally outranks
-  // both Time Rules and Trusted Sites while still following the master/link
-  // blocking switches.
-  let hardBlockedHost = '';
-  if (settings.enabled && settings.blockLinks) {
-    for (const candidateUrl of expandWrappedWebUrls(url)) {
-      hardBlockedHost = await findHardBlockedHost(candidateUrl);
-      if (hardBlockedHost) break;
-    }
-  }
-  if (hardBlockedHost) {
-    const hardDeniedReason = { type: 'link', trigger: hardBlockedHost, attemptedSearch: '' };
+  // Priority 1B: immutable built-in link rules are the hard-denied link floor.
+  // They are compiled into Focus Master, independent of blockedLinks.csv, and
+  // intentionally outrank both Time Rules and Trusted Sites. They still follow
+  // the master/link-blocking switches, just like the immutable floor did before.
+  const hardDeniedDataset = {
+    ...dataset,
+    terms: [],
+    links: HARD_CODED_LINK_RULES,
+    paths: [],
+    tlds: []
+  };
+  const hardDeniedReason = findBlockReason({ url, title }, hardDeniedDataset, settings);
+  if (hardDeniedReason) {
     redirectInFlight.add(tabId);
     recentlyRedirected.set(tabId, { url, at: Date.now() });
     try {
@@ -570,11 +660,39 @@ async function evaluateNavigation(tabId, url, title = '') {
       }
       try { await browser.history.deleteUrl({ url }); } catch {}
     } catch (error) {
-      console.warn('[BraveFox Focus Master] Hard-denied host redirect failed:', error);
+      console.warn('[BraveFox Focus Master] Hard-denied redirect failed:', error);
     } finally {
       redirectInFlight.delete(tabId);
     }
     return;
+  }
+
+  // Priority 1C: BraveFoxHosts + legacyFox are the remotely maintained
+  // hard-host shield. They are fetched live with last-known-good cache and
+  // bundled fallback, and intentionally cannot be bypassed by Trusted Sites.
+  // The compiled HARD_CODED_LINKS array above remains the final tamper-resistant
+  // path/query shield even if the remote host feeds are edited or unavailable.
+  if (settings.enabled && settings.blockLinks) {
+    let hardBlockedHost = '';
+    for (const candidateUrl of expandWrappedWebUrls(url)) {
+      hardBlockedHost = await findHardBlockedHost(candidateUrl);
+      if (hardBlockedHost) break;
+    }
+    if (hardBlockedHost) {
+      const hardHostReason = { type: 'host', trigger: hardBlockedHost, attemptedSearch: '' };
+      redirectInFlight.add(tabId);
+      recentlyRedirected.set(tabId, { url, at: Date.now() });
+      try {
+        sendNativeBlockLog(hardHostReason, url, '');
+        await browser.tabs.update(tabId, { url: blockedPageUrl(hardHostReason, url) });
+        try { await browser.history.deleteUrl({ url }); } catch {}
+      } catch (error) {
+        console.warn('[BraveFox Focus Master] Hard-host redirect failed:', error);
+      } finally {
+        redirectInFlight.delete(tabId);
+      }
+      return;
+    }
   }
 
   // Priority 2: Time Rules.
@@ -610,8 +728,12 @@ async function evaluateNavigation(tabId, url, title = '') {
   }
 
   // Priority 4A: normal user-managed Blocker terms / links / paths / TLDs.
-  // The immutable fetched-host floor has already been enforced at Priority 1B,
+  // The immutable built-in link floor has already been enforced at Priority 1B,
   // so the normal matcher uses only the synchronized/user-managed dataset here.
+  const effectiveDataset = {
+    ...dataset,
+    links: uniqueInOrder([...HARD_CODED_LINK_RULES, ...dataset.links], normalizeLinkForStorage)
+  };
   const reason = findBlockReason({ url, title }, dataset, settings);
   if (reason) {
     redirectInFlight.add(tabId);
@@ -634,7 +756,7 @@ async function evaluateNavigation(tabId, url, title = '') {
     return;
   }
 
-  // Priority 4B: fetched hosts are the blunt normal-blocker fallback. Archive/proxy URLs are
+  // Priority 4B: StevenBlack is the blunt normal-blocker fallback. Archive/proxy URLs are
   // checked against both the wrapper and every deterministic unwrapped target.
   // Path/query-specific Blocker rules keep their surgical-control exemption on
   // the corresponding candidate host instead of globally disabling host checks.
