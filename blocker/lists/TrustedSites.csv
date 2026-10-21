@@ -263,6 +263,7 @@ domain,jagex.zendesk.com,
 domain,static-2v.gitbook.com,
 domain,scum.help.jagex.com,
 domain,prominencepoker.help.jagex.com,
+domain,maps.google.com,
 
 # PATHS
 path,github.com,/paintdotnet
@@ -361,3 +362,4 @@ path,microsoft.com,/en-gb/software-download/windows10
 path,microsoft.com,/en-us/software-download/windows10
 path,secure.runescape.com,/m=news/archive
 path,secure.runescape.com,/m=news
+path,google.com,/maps
