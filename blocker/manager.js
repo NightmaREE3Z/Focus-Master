@@ -15,6 +15,7 @@ import {
   normalizeTldForStorage
 } from './shared.js';
 import { normalizeTrustedSiteEntry, parseTrustedSiteEntry } from './trusted-sites.js';
+import { normalizeExtensionRule } from './extension-stores.js';
 
 const state = {
   view: 'terms',
@@ -23,6 +24,7 @@ const state = {
   paths: [],
   tlds: [],
   trustedSites: [],
+  extensionIds: [],
   trustedSiteFilter: 'domain',
   profile: 'haukkis',
   timerProfile: 'haukkis',
@@ -88,14 +90,28 @@ function valuesForKind(kind) {
   return Array.isArray(state[kind]) ? state[kind] : [];
 }
 
+function isStoreTerm(value) {
+  return /^store:/i.test(String(value || ''));
+}
+
+function storeTermValues() {
+  return state.terms.filter(isStoreTerm);
+}
+
+function normalizeStoreTerm(value) {
+  const phrase = normalizeTerm(value).replace(/^store:\s*/i, '').trim();
+  return phrase ? `store:${phrase}` : '';
+}
+
 function currentSingleKind() {
-  return state.view === 'trustedSites' ? 'trustedSites' : 'terms';
+  return state.view === 'trustedSites' ? 'trustedSites' : state.view === 'extensionIds' ? 'extensionIds' : 'terms';
 }
 
 function normalizerForKind(kind) {
   if (kind === 'links' || kind === 'paths') return normalizeLinkForStorage;
   if (kind === 'tlds') return normalizeTldForStorage;
   if (kind === 'trustedSites') return normalizeTrustedSiteEntry;
+  if (kind === 'extensionIds') return normalizeExtensionRule;
   return normalizeTerm;
 }
 
@@ -105,6 +121,7 @@ function kindLabel(kind, count = 1) {
   if (kind === 'paths') return `path rule${plural}`;
   if (kind === 'tlds') return `TLD${plural}`;
   if (kind === 'trustedSites') return `trusted site rule${plural}`;
+  if (kind === 'extensionIds') return `extension listing rule${plural}`;
   return `term${plural}`;
 }
 
@@ -113,10 +130,15 @@ function exportNameForKind(kind) {
   if (kind === 'paths') return 'BraveFox-Blocker-Paths.csv';
   if (kind === 'tlds') return 'BraveFox-Blocker-TLDs.csv';
   if (kind === 'trustedSites') return 'BraveFox-TrustedSites.csv';
+  if (kind === 'extensionIds') return 'BraveFox-Blocked-Extension-IDs.csv';
   return 'BraveFox-Blocker-Terms.csv';
 }
 
 function displayEntry(kind, value) {
+  if (kind === 'terms' && isStoreTerm(value)) return {
+    text: value.replace(/^store:/i, ''), badge: 'STORE', badgeClass: 'terms',
+    title: 'Matches extension-store listing titles and URL slugs only.'
+  };
   if (kind !== 'trustedSites') return { text: value, badge: kind === 'links' ? 'LINK' : kind === 'paths' ? 'PATH' : kind === 'tlds' ? 'TLD' : '', badgeClass: kind };
   const descriptor = parseTrustedSiteEntry(value);
   if (!descriptor) return { text: value, badge: 'RULE', badgeClass: 'domain' };
@@ -136,6 +158,7 @@ function applyResponse(response) {
   if (Array.isArray(response.paths)) state.paths = response.paths;
   if (Array.isArray(response.tlds)) state.tlds = response.tlds;
   if (Array.isArray(response.trustedSites)) state.trustedSites = response.trustedSites;
+  if (Array.isArray(response.extensionIds)) state.extensionIds = response.extensionIds;
   if (response.profile === 'haukkis' || response.profile === 'tapsa') {
     const previousProfile = state.profile;
     state.profile = response.profile;
@@ -202,10 +225,12 @@ function updateTrustedTypeFilterUi() {
 }
 
 function renderCounts() {
-  if (elements.termCount) elements.termCount.textContent = state.terms.length;
+  if (elements.termCount) elements.termCount.textContent = state.terms.filter(value => !isStoreTerm(value)).length;
+  if (elements.extensionTermCount) elements.extensionTermCount.textContent = storeTermValues().length;
   if (elements.linkTldCount) elements.linkTldCount.textContent = state.links.length + state.paths.length + state.tlds.length;
   if (elements.dailyLimitCount) elements.dailyLimitCount.textContent = (Array.isArray(state.settings.scheduledRules) ? state.settings.scheduledRules.length : 0) + (Array.isArray(state.settings.quotaRules) ? state.settings.quotaRules.length : 0);
   if (elements.trustedSiteCount) elements.trustedSiteCount.textContent = state.trustedSites.length;
+  if (elements.extensionIdCount) elements.extensionIdCount.textContent = state.extensionIds.length;
   if (elements.linkSectionCount) elements.linkSectionCount.textContent = state.links.length;
   if (elements.pathSectionCount) elements.pathSectionCount.textContent = state.paths.length;
   if (elements.tldSectionCount) elements.tldSectionCount.textContent = state.tlds.length;
@@ -282,7 +307,14 @@ function renderSingleList() {
     return;
   }
   elements.emptyState.textContent = 'No entries yet.';
-  renderListInto('terms', elements.searchInput, elements.items, elements.emptyState);
+  const kind = state.view === 'extensionIds' ? 'extensionIds' : 'terms';
+  renderListInto(kind, elements.searchInput, elements.items, elements.emptyState,
+    kind === 'terms' ? value => !isStoreTerm(value) : null);
+}
+
+function renderExtensionTermsList() {
+  renderListInto('terms', elements.extensionTermSearchInput, elements.extensionTermItems,
+    elements.extensionTermEmptyState, isStoreTerm);
 }
 
 function renderSplitLists() {
@@ -293,7 +325,10 @@ function renderSplitLists() {
 
 function renderCurrentView() {
   if (state.view === 'links') renderSplitLists();
-  else if (state.view === 'terms' || state.view === 'trustedSites') renderSingleList();
+  else if (state.view === 'terms' || state.view === 'trustedSites' || state.view === 'extensionIds') {
+    renderSingleList();
+    if (state.view === 'extensionIds') renderExtensionTermsList();
+  }
 }
 
 function selectView(view) {
@@ -305,8 +340,10 @@ function selectView(view) {
   const settings = view === 'settings';
   const dailyLimits = view === 'dailyLimits';
   const split = view === 'links';
-  const single = view === 'terms' || view === 'trustedSites';
+  const single = view === 'terms' || view === 'trustedSites' || view === 'extensionIds';
   elements.singleListView.hidden = !single;
+  elements.extensionTermsView.hidden = view !== 'extensionIds';
+  elements.extensionIdsHeading.hidden = view !== 'extensionIds';
   elements.linksTldsView.hidden = !split;
   elements.dailyLimitsView.hidden = !dailyLimits;
   elements.settingsView.hidden = !settings;
@@ -314,10 +351,16 @@ function selectView(view) {
 
   if (view === 'terms') {
     elements.viewTitle.textContent = 'Blocked terms';
-    elements.viewSubtitle.textContent = 'Manage words and phrases that trigger blocking.';
+    elements.viewSubtitle.textContent = 'Manage global website terms. Extension-store-only terms are under Blocked Extension IDs.';
     elements.addInput.placeholder = 'Add a term or phrase';
     elements.searchInput.placeholder = 'Search the list';
     elements.singleListOrderNote.textContent = 'Order follows the CSV. Merge imports append new unique entries; manual additions go to the end.';
+  } else if (view === 'extensionIds') {
+    elements.viewTitle.textContent = 'Blocked extension IDs';
+    elements.viewSubtitle.textContent = 'Manage exact extension IDs and store-specific blocked terms separately, without matching unrelated sites.';
+    elements.addInput.placeholder = 'chrome:ID, edge:ID, amo:slug, opera:slug, or a store URL';
+    elements.searchInput.placeholder = 'Search extension rules';
+    elements.singleListOrderNote.textContent = 'Chrome/Edge: exact 32-letter IDs. AMO/Opera: exact detail-page slugs. Store prefix required; random strings never match.';
   } else if (view === 'links') {
     elements.viewTitle.textContent = 'Blocked links / paths / TLDs';
     elements.viewSubtitle.textContent = 'Keep whole-host blocks, surgical URL rules and hostname-suffix rules separate.';
@@ -560,7 +603,7 @@ function syncStatusText(sync = state.githubSync) {
   lines.push(`Pending changes: ${Number(sync.pendingCount) || 0}`);
   if (sync.lastSyncAt) lines.push(`Last sync: ${new Date(sync.lastSyncAt).toLocaleString()} — ${sync.lastAction || 'completed'}`);
   else lines.push('Last sync: never');
-  lines.push('Global lists: blockedLinks.csv + blockedPaths.csv + blockedTLDs.csv + TrustedSites.csv');
+  lines.push('Global lists: blockedLinks.csv + blockedPaths.csv + blockedTLDs.csv + TrustedSites.csv + blockedExtensionIDs.csv');
   if (sync.suggestedProfileLabel) lines.push(`Detected browser account suggests ${sync.suggestedProfileLabel}.`);
   if (sync.lastError) lines.push(`Last error: ${sync.lastError}`);
   return lines.join('\n');
@@ -598,11 +641,13 @@ async function refreshGithubSyncStatus() {
   const files = response.githubSync.target?.files;
   if (files?.terms?.rawUrl && elements.termsRawLink) elements.termsRawLink.href = files.terms.rawUrl;
   if (files?.links?.rawUrl && elements.linksRawLink) elements.linksRawLink.href = files.links.rawUrl;
+  if (files?.extensionIds?.rawUrl && elements.extensionIdsRawLink) elements.extensionIdsRawLink.href = files.extensionIds.rawUrl;
   if (files?.paths?.rawUrl && elements.pathsRawLink) elements.pathsRawLink.href = files.paths.rawUrl;
   if (files?.tlds?.rawUrl && elements.tldsRawLink) elements.tldsRawLink.href = files.tlds.rawUrl;
   if (files?.trustedSites?.rawUrl && elements.trustedSitesRawLink) elements.trustedSitesRawLink.href = files.trustedSites.rawUrl;
   if (files?.terms?.path && elements.termsRawLink) elements.termsRawLink.textContent = files.terms.path.split('/').pop();
   if (files?.links?.path && elements.linksRawLink) elements.linksRawLink.textContent = files.links.path.split('/').pop();
+  if (files?.extensionIds?.path && elements.extensionIdsRawLink) elements.extensionIdsRawLink.textContent = files.extensionIds.path.split('/').pop();
   if (files?.paths?.path && elements.pathsRawLink) elements.pathsRawLink.textContent = files.paths.path.split('/').pop();
   if (files?.tlds?.path && elements.tldsRawLink) elements.tldsRawLink.textContent = files.tlds.path.split('/').pop();
   if (files?.trustedSites?.path && elements.trustedSitesRawLink) elements.trustedSitesRawLink.textContent = files.trustedSites.path.split('/').pop();
@@ -682,7 +727,7 @@ async function runGithubAction(button, action) {
   try {
     if (action === 'upload') {
       await saveGithubSettings({ requireConsent: true });
-    } else if (!window.confirm(`Download ${state.githubSync?.activeProfileLabel || 'the selected profile'} terms plus the global links, paths, TLDs and trusted sites from GitHub and replace the current local lists?`)) {
+    } else if (!window.confirm(`Download ${state.githubSync?.activeProfileLabel || 'the selected profile'} terms plus the global links, paths, TLDs, extension IDs and trusted sites from GitHub and replace the current local lists?`)) {
       return;
     }
 
@@ -906,7 +951,8 @@ function bindAdminControls() {
       const pathSummary = Array.isArray(backup.paths) ? `${backup.paths.length} path rules` : 'keep current path rules';
       const tldSummary = Array.isArray(backup.tlds) ? `${backup.tlds.length} TLDs` : 'keep current TLDs';
       const trustedSummary = Array.isArray(backup.trustedSites) ? `${backup.trustedSites.length} trusted rules` : 'keep current trusted rules';
-      if (!window.confirm(`Restore ${backup.terms.length} ordered terms, ${backup.links.length} ordered links, ${pathSummary}, ${tldSummary}, ${trustedSummary} and protected settings?`)) return;
+      const extensionSummary = Array.isArray(backup.extensionIds) ? `${backup.extensionIds.length} extension listing rules` : 'keep current extension listing rules';
+      if (!window.confirm(`Restore ${backup.terms.length} ordered terms, ${backup.links.length} ordered links, ${pathSummary}, ${tldSummary}, ${trustedSummary}, ${extensionSummary} and protected settings?`)) return;
       const response = await message({ type: MESSAGE.replaceAll, ...backup }, { redirectOnLock: false });
       applyResponse(response);
       renderCounts();
@@ -968,9 +1014,12 @@ function bindListEditor({ kind, addInput, addButton, searchInput, importMode, im
 
 function bind() {
   Object.assign(elements, {
-    app: $('#app'), termCount: $('#termCount'), linkTldCount: $('#linkTldCount'), dailyLimitCount: $('#dailyLimitCount'), trustedSiteCount: $('#trustedSiteCount'),
+    app: $('#app'), termCount: $('#termCount'), linkTldCount: $('#linkTldCount'), dailyLimitCount: $('#dailyLimitCount'), trustedSiteCount: $('#trustedSiteCount'), extensionIdCount: $('#extensionIdCount'),
     linkSectionCount: $('#linkSectionCount'), pathSectionCount: $('#pathSectionCount'), tldSectionCount: $('#tldSectionCount'),
-    viewTitle: $('#viewTitle'), viewSubtitle: $('#viewSubtitle'), singleListView: $('#singleListView'), linksTldsView: $('#linksTldsView'), dailyLimitsView: $('#dailyLimitsView'), settingsView: $('#settingsView'),
+    viewTitle: $('#viewTitle'), viewSubtitle: $('#viewSubtitle'), singleListView: $('#singleListView'), extensionIdsHeading: $('#extensionIdsHeading'), extensionTermsView: $('#extensionTermsView'), linksTldsView: $('#linksTldsView'), dailyLimitsView: $('#dailyLimitsView'), settingsView: $('#settingsView'),
+    extensionTermCount: $('#extensionTermCount'), addExtensionTermInput: $('#addExtensionTermInput'), addExtensionTermButton: $('#addExtensionTermButton'),
+    extensionTermSearchInput: $('#extensionTermSearchInput'), extensionTermImportMode: $('#extensionTermImportMode'), extensionTermImportButton: $('#extensionTermImportButton'),
+    extensionTermExportButton: $('#extensionTermExportButton'), extensionTermFileInput: $('#extensionTermFileInput'), extensionTermItems: $('#extensionTermItems'), extensionTermEmptyState: $('#extensionTermEmptyState'),
     trustedTypeBar: $('#trustedTypeBar'), trustedTypeFilter: $('#trustedTypeFilter'),
     addInput: $('#addInput'), addButton: $('#addButton'), searchInput: $('#searchInput'), importMode: $('#importMode'),
     importButton: $('#importButton'), exportButton: $('#exportButton'), fileInput: $('#fileInput'), items: $('#items'), emptyState: $('#emptyState'), singleListOrderNote: $('#singleListOrderNote'),
@@ -987,7 +1036,7 @@ function bind() {
     lockButton: $('#lockButton'), toast: $('#toast'), syncLabel: $('#syncLabel'), syncDialog: $('#syncDialog'),
     closeSyncDialog: $('#closeSyncDialog'), githubTokenInput: $('#githubTokenInput'), tokenRecoveryToggle: $('#tokenRecoveryToggle'), automaticSyncToggle: $('#automaticSyncToggle'),
     clearGithubToken: $('#clearGithubToken'), githubSyncStatus: $('#githubSyncStatus'), termsRawLink: $('#termsRawLink'), linksRawLink: $('#linksRawLink'), pathsRawLink: $('#pathsRawLink'),
-    tldsRawLink: $('#tldsRawLink'), trustedSitesRawLink: $('#trustedSitesRawLink'), syncProfileSelect: $('#syncProfileSelect'), syncProfileHelp: $('#syncProfileHelp'), detectedProfileStatus: $('#detectedProfileStatus'),
+    tldsRawLink: $('#tldsRawLink'), trustedSitesRawLink: $('#trustedSitesRawLink'), extensionIdsRawLink: $('#extensionIdsRawLink'), syncProfileSelect: $('#syncProfileSelect'), syncProfileHelp: $('#syncProfileHelp'), detectedProfileStatus: $('#detectedProfileStatus'),
     saveGithubSyncSettings: $('#saveGithubSyncSettings'), downloadFromGithub: $('#downloadFromGithub'), uploadToGithub: $('#uploadToGithub')
   });
 
@@ -1024,10 +1073,14 @@ function bind() {
     if (!file) return;
     const kind = currentSingleKind();
     try {
-      const values = parseListText(await file.text(), kind);
-      if (!values.length) throw new Error('No usable entries were found in the file.');
-      if (elements.importMode.value === 'replace' && !confirm(`Replace the entire ${kindLabel(kind, 2)} list with ${values.length} ordered entries?`)) return;
-      const response = await message({ type: MESSAGE.importList, kind, mode: elements.importMode.value, values });
+      const imported = parseListText(await file.text(), kind);
+      // The global Terms editor must never erase extension-store terms.
+      const values = kind === 'terms' ? imported.filter(value => !isStoreTerm(value)) : imported;
+      if (!values.length) throw new Error('No usable entries were found for this list.');
+      if (elements.importMode.value === 'replace' && !confirm(`Replace the ${kind === 'terms' ? 'global terms' : kindLabel(kind, 2)} list with ${values.length} ordered entries?`)) return;
+      const safeValues = kind === 'terms' && elements.importMode.value === 'replace'
+        ? [...values, ...storeTermValues()] : values;
+      const response = await message({ type: MESSAGE.importList, kind, mode: elements.importMode.value, values: safeValues });
       applyResponse(response);
       renderCounts();
       renderCurrentView();
@@ -1036,7 +1089,50 @@ function bind() {
   });
   elements.exportButton.addEventListener('click', () => {
     const kind = currentSingleKind();
-    downloadText(exportNameForKind(kind), serializeListForKind(valuesForKind(kind), kind), 'text/csv;charset=utf-8');
+    const values = kind === 'terms' ? state.terms.filter(value => !isStoreTerm(value)) : valuesForKind(kind);
+    downloadText(exportNameForKind(kind), serializeListForKind(values, kind), 'text/csv;charset=utf-8');
+  });
+
+  // Dedicated extension-store term editor; the backend stores these as store:
+  // rules in blockedTerms.csv, preserving sync, backup, and existing seed rules.
+  elements.addExtensionTermButton.addEventListener('click', async () => {
+    const value = normalizeStoreTerm(elements.addExtensionTermInput.value);
+    if (!value) return toast('Enter an extension name or phrase first.');
+    try {
+      const response = await message({ type: MESSAGE.addItem, kind: 'terms', value });
+      applyResponse(response);
+      elements.addExtensionTermInput.value = '';
+      renderCounts();
+      renderCurrentView();
+      toast('Extension term appended; GitHub sync queued.');
+    } catch (error) { if (!lockingOut) toast(error.message); }
+  });
+  elements.addExtensionTermInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') elements.addExtensionTermButton.click();
+  });
+  elements.extensionTermSearchInput.addEventListener('input', renderExtensionTermsList);
+  elements.extensionTermImportButton.addEventListener('click', () => elements.extensionTermFileInput.click());
+  elements.extensionTermFileInput.addEventListener('change', async () => {
+    const file = elements.extensionTermFileInput.files?.[0];
+    elements.extensionTermFileInput.value = '';
+    if (!file) return;
+    try {
+      const imported = parseListText(await file.text(), 'terms');
+      const values = [...new Set(imported.map(normalizeStoreTerm).filter(Boolean))];
+      if (!values.length) throw new Error('No usable extension terms were found in the file.');
+      const replace = elements.extensionTermImportMode.value === 'replace';
+      if (replace && !confirm(`Replace only the ${storeTermValues().length} extension-store terms with ${values.length} imported entries? Global terms will remain unchanged.`)) return;
+      const safeValues = replace
+        ? [...state.terms.filter(value => !isStoreTerm(value)), ...values] : values;
+      const response = await message({ type: MESSAGE.importList, kind: 'terms', mode: replace ? 'replace' : 'merge', values: safeValues });
+      applyResponse(response);
+      renderCounts();
+      renderCurrentView();
+      toast(`${values.length} extension terms imported; GitHub sync queued.`);
+    } catch (error) { if (!lockingOut) toast(error.message); }
+  });
+  elements.extensionTermExportButton.addEventListener('click', () => {
+    downloadText('BraveFox-Blocked-Extension-Terms.csv', serializeListForKind(storeTermValues(), 'terms'), 'text/csv;charset=utf-8');
   });
 
   bindListEditor({

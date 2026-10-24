@@ -1,3 +1,4 @@
+import { normalizeExtensionRule } from './extension-stores.js';
 import {
   normalizeLinkForStorage,
   normalizeTerm,
@@ -14,6 +15,7 @@ function normalizerFor(kind) {
   if (kind === 'links' || kind === 'paths') return normalizeLinkForStorage;
   if (kind === 'tlds') return normalizeTldForStorage;
   if (kind === 'trustedSites') return normalizeTrustedSiteEntry;
+  if (kind === 'extensionIds') return normalizeExtensionRule;
   return normalizeTerm;
 }
 
@@ -45,23 +47,24 @@ export function serializeListForKind(values, kind) {
   return kind === 'trustedSites' ? serializeTrustedSitesCsv(values) : serializeListCsv(values);
 }
 
-export function serializeFullBackup({ terms, links, paths, tlds, trustedSites, settings }) {
+export function serializeFullBackup({ terms, links, paths, tlds, trustedSites, extensionIds, settings }) {
   return JSON.stringify({
     format: 'bravefox-blocker-backup',
-    version: 3,
+    version: 4,
     exportedAt: new Date().toISOString(),
     terms: Array.isArray(terms) ? terms : [],
     links: Array.isArray(links) ? links : [],
     paths: Array.isArray(paths) ? paths : [],
     tlds: Array.isArray(tlds) ? tlds : [],
     trustedSites: Array.isArray(trustedSites) ? trustedSites : [],
+    extensionIds: Array.isArray(extensionIds) ? extensionIds : [],
     settings: settings || {}
   }, null, 2);
 }
 
 export function parseFullBackup(text) {
   const parsed = JSON.parse(String(text ?? ''));
-  if (!parsed || parsed.format !== 'bravefox-blocker-backup' || ![1, 2, 3].includes(Number(parsed.version))) {
+  if (!parsed || parsed.format !== 'bravefox-blocker-backup' || ![1, 2, 3, 4].includes(Number(parsed.version))) {
     throw new Error('This is not a supported BraveFox Focus Master backup.');
   }
   return {
@@ -74,6 +77,7 @@ export function parseFullBackup(text) {
     // list alone” so restoring an old backup cannot silently wipe newer rules.
     tlds: Array.isArray(parsed.tlds) ? uniqueInOrder(parsed.tlds, normalizeTldForStorage) : null,
     trustedSites: Array.isArray(parsed.trustedSites) ? uniqueInOrder(parsed.trustedSites, normalizeTrustedSiteEntry) : null,
+    extensionIds: Array.isArray(parsed.extensionIds) ? uniqueInOrder(parsed.extensionIds, normalizeExtensionRule) : null,
     settings: parsed.settings && typeof parsed.settings === 'object' ? parsed.settings : {}
   };
 }

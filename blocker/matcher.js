@@ -1,3 +1,4 @@
+import { extensionListingFromUrl, matchExtensionListing } from './extension-stores.js';
 import {
   isSupportedWebUrl,
   normalizeSearchable,
@@ -350,8 +351,39 @@ function exactHostnameLabels(urlValue) {
   }
 }
 
+// `store:` entries are deliberately limited to extension-store detail pages.
+// Use the listing slug plus cleaned tab title only: never match IDs against
+// arbitrary content, nor make broad store terms block unrelated web pages.
+function storeTitleCandidates(url, title) {
+  const listing = extensionListingFromUrl(url);
+  if (!listing) return [];
+  const candidates = [];
+  try {
+    const pieces = new URL(url).pathname.split('/').filter(Boolean);
+    const slug = (listing.store === 'chrome' || listing.store === 'edge')
+      ? (pieces.length === 3 || pieces.length === 4 ? pieces[pieces.length - 2] : '')
+      : listing.id;
+    if (slug) candidates.push(slug);
+  } catch {}
+  let cleanTitle = String(title || '').trim();
+  cleanTitle = cleanTitle.replace(/\s+[-|–—]\s+(?:chrome web store|firefox add-ons|mozilla add-ons|microsoft edge add-ons|opera add-ons|addons for firefox|addons for opera).*$/i, '');
+  cleanTitle = cleanTitle.replace(/\s+[-|–—]\s+get this (?:extension|add-on) for firefox.*$/i, '');
+  if (cleanTitle) candidates.push(cleanTitle);
+  return candidates.map(normalizeSearchable).filter(Boolean);
+}
+
+function matchScopedStoreTerm(stored, candidates) {
+  const match = /^store:(.+)$/i.exec(String(stored || ''));
+  if (!match || !candidates.length) return false;
+  const term = normalizeSearchable(match[1]);
+  if (!term) return false;
+  // Whole phrase boundary, not a substring inside an unrelated word.
+  return candidates.some(value => (` ${value} `).includes(` ${term} `));
+}
+
 export function matchTerm({ url, title = '' }, terms) {
   if (!isSupportedWebUrl(url)) return null;
+  const storeCandidates = storeTitleCandidates(url, title);
   const urlCandidates = expandWrappedWebUrls(url);
   const fields = [];
   const hostLabels = [];
@@ -367,6 +399,10 @@ export function matchTerm({ url, title = '' }, terms) {
   if (!fields.length && !hostLabels.length) return null;
 
   for (const stored of Array.isArray(terms) ? terms : []) {
+    if (/^store:/i.test(String(stored))) {
+      if (matchScopedStoreTerm(stored, storeCandidates)) return stored;
+      continue;
+    }
     const normalizedTerm = normalizeSearchable(stored);
 
     // Hostnames get intentionally strict matching: a blocked term may match an
@@ -384,6 +420,8 @@ export function matchTerm({ url, title = '' }, terms) {
 export function findBlockReason({ url, title = '' }, dataset, settings) {
   if (!settings.enabled || !isSupportedWebUrl(url)) return null;
   if (settings.blockLinks) {
+    const listing = matchExtensionListing(url, dataset.extensionIds);
+    if (listing) return { type: 'extension', trigger: listing, attemptedSearch: '' };
     const tld = matchTld(url, dataset.tlds);
     if (tld) return { type: 'tld', trigger: tld, attemptedSearch: '' };
     const link = matchLink(url, dataset.links);

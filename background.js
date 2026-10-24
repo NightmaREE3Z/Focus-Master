@@ -37,6 +37,7 @@ import {
   synchronizeNow,
   updateSettings
 } from './blocker/storage.js';
+import { normalizeExtensionRule } from './blocker/extension-stores.js';
 import { normalizeTrustedSiteEntry } from './blocker/trusted-sites.js';
 import {
   isCompletelyExcludedUrl,
@@ -374,7 +375,7 @@ async function requireAdminAccess(sender) {
   return tabId;
 }
 
-function publicCounts(dataset) { return { termCount: dataset.terms.length, linkCount: dataset.links.length, pathCount: dataset.paths.length, tldCount: dataset.tlds.length, trustedSiteCount: dataset.trustedSites.length }; }
+function publicCounts(dataset) { return { termCount: dataset.terms.length, linkCount: dataset.links.length, pathCount: dataset.paths.length, tldCount: dataset.tlds.length, trustedSiteCount: dataset.trustedSites.length, extensionIdCount: dataset.extensionIds.length }; }
 
 function consoleClockTime() {
   return new Date().toLocaleTimeString([], {
@@ -447,6 +448,7 @@ async function fullState(sender) {
     paths: dataset.paths,
     tlds: dataset.tlds,
     trustedSites: dataset.trustedSites,
+    extensionIds: dataset.extensionIds,
     profile: dataset.profile,
     settings,
     adminUnlocked: await isAdminTabUnlocked(tabId),
@@ -473,6 +475,7 @@ function normalizerForKind(kind) {
   if (kind === 'links' || kind === 'paths') return normalizeLinkForStorage;
   if (kind === 'tlds') return normalizeTldForStorage;
   if (kind === 'trustedSites') return normalizeTrustedSiteEntry;
+  if (kind === 'extensionIds') return normalizeExtensionRule;
   if (kind === 'terms') return normalizeTerm;
   throw new Error('Unknown list type.');
 }
@@ -496,6 +499,7 @@ async function mutateDataset(kind, operation, payload) {
     paths: kind === 'paths' ? next : dataset.paths,
     tlds: kind === 'tlds' ? next : dataset.tlds,
     trustedSites: kind === 'trustedSites' ? next : dataset.trustedSites,
+    extensionIds: kind === 'extensionIds' ? next : dataset.extensionIds,
     profile: dataset.profile
   });
 
@@ -518,6 +522,7 @@ async function mutateDataset(kind, operation, payload) {
     paths: saved.paths,
     tlds: saved.tlds,
     trustedSites: saved.trustedSites,
+    extensionIds: saved.extensionIds,
     profile: saved.profile,
     storageStatus: publicStorageStatus(saved),
     githubSync: await getGitHubSyncStatus()
@@ -545,7 +550,7 @@ function shouldBypassRedirect(tabId, url) {
 function configuredRedirectTarget(reason, settings, sourceUrl) {
   let configured = '';
   if (reason?.type === 'term' && settings?.redirectTerms) configured = settings.redirectTermsUrl;
-  if ((reason?.type === 'link' || reason?.type === 'tld') && settings?.redirectLinks) configured = settings.redirectLinksUrl;
+  if ((reason?.type === 'link' || reason?.type === 'tld' || reason?.type === 'extension') && settings?.redirectLinks) configured = settings.redirectLinksUrl;
   const target = normalizedComparableUrl(configured);
   const source = normalizedComparableUrl(sourceUrl);
   if (!target || target === source) return '';
@@ -658,6 +663,7 @@ async function evaluateNavigation(tabId, url, title = '') {
   const hardDeniedDataset = {
     ...dataset,
     terms: [],
+    extensionIds: [],
     links: HARD_CODED_LINK_RULES,
     paths: [],
     tlds: []
@@ -886,13 +892,13 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case MESSAGE.quickAddItem: {
         if (!senderIsOptionsPage(sender)) throw new Error('Quick Block request denied.');
         if (isIncognitoSender(sender)) throw new Error('Quick Block is unavailable in private browsing.');
-        const kind = message.kind === 'links' ? 'links' : message.kind === 'terms' ? 'terms' : '';
-        if (!kind) throw new Error('Choose Add Term or Add Link first.');
-        const normalizer = kind === 'links' ? normalizeLinkForStorage : normalizeTerm;
+        const kind = ['terms', 'links', 'extensionIds'].includes(message.kind) ? message.kind : '';
+        if (!kind) throw new Error('Choose a Quick Block type first.');
+        const normalizer = kind === 'links' ? normalizeLinkForStorage : kind === 'extensionIds' ? normalizeExtensionRule : normalizeTerm;
         const value = normalizer(message.value);
-        if (!value) throw new Error(kind === 'links' ? 'Enter a valid link.' : 'Enter a valid term.');
+        if (!value) throw new Error(kind === 'links' ? 'Enter a valid link.' : kind === 'extensionIds' ? 'Enter a store-qualified ID or listing URL.' : 'Enter a valid term.');
         const result = await mutateDataset(kind, 'add', { value });
-        const values = kind === 'links' ? result.links : result.terms;
+        const values = result[kind];
         return {
           ok: true,
           changed: Boolean(result.changed),
@@ -953,12 +959,14 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           paths: Array.isArray(message.paths) ? message.paths : current.paths,
           tlds: Array.isArray(message.tlds) ? message.tlds : current.tlds,
           trustedSites: Array.isArray(message.trustedSites) ? message.trustedSites : current.trustedSites,
+          extensionIds: Array.isArray(message.extensionIds) ? message.extensionIds : current.extensionIds,
           profile: current.profile
         });
         const snapshots = [queueRemoteSnapshot('terms'), queueRemoteSnapshot('links')];
         if (Array.isArray(message.paths)) snapshots.push(queueRemoteSnapshot('paths'));
         if (Array.isArray(message.tlds)) snapshots.push(queueRemoteSnapshot('tlds'));
         if (Array.isArray(message.trustedSites)) snapshots.push(queueRemoteSnapshot('trustedSites'));
+        if (Array.isArray(message.extensionIds)) snapshots.push(queueRemoteSnapshot('extensionIds'));
         await Promise.all(snapshots);
         const settings = await updateSettings(sanitizeAdminPatch(message.settings));
         return {
@@ -968,6 +976,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           paths: saved.paths,
           tlds: saved.tlds,
           trustedSites: saved.trustedSites,
+          extensionIds: saved.extensionIds,
           profile: saved.profile,
           storageStatus: publicStorageStatus(saved),
           settings,
@@ -985,6 +994,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           paths: result.dataset.paths,
           tlds: result.dataset.tlds,
           trustedSites: result.dataset.trustedSites,
+          extensionIds: result.dataset.extensionIds,
           profile: result.dataset.profile,
           settings: result.settings,
           adminUnlocked: await isAdminTabUnlocked(tabId),
@@ -1019,6 +1029,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           paths: result.dataset.paths,
           tlds: result.dataset.tlds,
           trustedSites: result.dataset.trustedSites,
+          extensionIds: result.dataset.extensionIds,
           profile: result.dataset.profile,
           storageStatus: publicStorageStatus(result.dataset),
           githubSync: await getGitHubSyncStatus(),
@@ -1035,6 +1046,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           paths: result.dataset.paths,
           tlds: result.dataset.tlds,
           trustedSites: result.dataset.trustedSites,
+          extensionIds: result.dataset.extensionIds,
           profile: result.dataset.profile,
           storageStatus: publicStorageStatus(result.dataset),
           githubSync: await getGitHubSyncStatus()

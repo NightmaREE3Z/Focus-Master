@@ -1,6 +1,7 @@
 import { browser } from './api.js';
 import { MESSAGE } from './constants.js';
 import { normalizeLinkForStorage, normalizeTerm } from './shared.js';
+import { normalizeExtensionRule } from './extension-stores.js';
 
 const toggle = document.querySelector('#quickToggle');
 const panel = document.querySelector('#quickPanel');
@@ -14,18 +15,33 @@ const kindButtons = [...document.querySelectorAll('.kind-button')];
 
 let kind = 'terms';
 
+function normalizeStoreTerm(value) {
+  const phrase = normalizeTerm(value).replace(/^store:\s*/i, '').trim();
+  return phrase ? `store:${phrase}` : '';
+}
+
 function showStatus(message, state = 'ok') {
   status.textContent = message;
   status.dataset.state = state;
 }
 
 function setKind(nextKind) {
-  kind = nextKind === 'links' ? 'links' : 'terms';
+  kind = ['terms', 'links', 'extensionIds', 'extensionTerms'].includes(nextKind) ? nextKind : 'terms';
   for (const button of kindButtons) {
     button.setAttribute('aria-selected', String(button.dataset.kind === kind));
   }
 
-  if (kind === 'links') {
+  if (kind === 'extensionTerms') {
+    label.textContent = 'Extension name or phrase to block';
+    input.placeholder = 'IE Tab, browser within browser…';
+    input.inputMode = 'text';
+    help.textContent = 'Store-only matching: extension detail-page titles and listing URL slugs across recognized stores. Does not affect unrelated websites.';
+  } else if (kind === 'extensionIds') {
+    label.textContent = 'Extension listing to block';
+    input.placeholder = 'chrome:ID, edge:ID, amo:slug, or store URL';
+    input.inputMode = 'text';
+    help.textContent = 'Store-specific exact matches only. AMO/Opera use listing slugs; IDs never match unrelated sites.';
+  } else if (kind === 'links') {
     label.textContent = 'Link to block';
     input.placeholder = 'example.com or example.com/path';
     input.inputMode = 'url';
@@ -34,7 +50,7 @@ function setKind(nextKind) {
     label.textContent = 'Term to block';
     input.placeholder = 'Enter a word or phrase';
     input.inputMode = 'text';
-    help.textContent = 'The term is normalized and appended to the blocked-terms list.';
+    help.textContent = 'Global website terms. Use Add Extension Term to block only extension-store listings.';
   }
 
   showStatus('');
@@ -56,10 +72,10 @@ form.addEventListener('submit', async event => {
   event.preventDefault();
   showStatus('');
 
-  const normalize = kind === 'links' ? normalizeLinkForStorage : normalizeTerm;
+  const normalize = kind === 'links' ? normalizeLinkForStorage : kind === 'extensionIds' ? normalizeExtensionRule : kind === 'extensionTerms' ? normalizeStoreTerm : normalizeTerm;
   const value = normalize(input.value);
   if (!value) {
-    showStatus(kind === 'links' ? 'Enter a valid link first.' : 'Enter a valid term first.', 'error');
+    showStatus(kind === 'links' ? 'Enter a valid link first.' : kind === 'extensionIds' ? 'Enter a store-qualified ID or listing URL.' : 'Enter a valid term first.', 'error');
     input.focus();
     return;
   }
@@ -71,12 +87,12 @@ form.addEventListener('submit', async event => {
   try {
     const response = await browser.runtime.sendMessage({
       type: MESSAGE.quickAddItem,
-      kind,
+      kind: kind === 'extensionTerms' ? 'terms' : kind,
       value
     });
     if (!response?.ok) throw new Error(response?.error || 'Quick Block request failed.');
 
-    const itemName = kind === 'links' ? 'link' : 'term';
+    const itemName = kind === 'links' ? 'link' : kind === 'extensionIds' ? 'extension listing' : kind === 'extensionTerms' ? 'extension term' : 'term';
     if (response.changed) {
       showStatus(`Added ${itemName}: ${response.value}`);
       input.value = '';

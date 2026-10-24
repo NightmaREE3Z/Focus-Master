@@ -110,7 +110,7 @@
 
     .kind-switcher {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 8px;
       margin: 14px 0 12px;
       padding: 4px;
@@ -119,6 +119,7 @@
     }
 
     .kind-button {
+      padding: 6px 4px;
       min-height: 42px;
       border-radius: 9px;
       color: #5d6879;
@@ -293,6 +294,8 @@
           <div class="kind-switcher" role="tablist" aria-label="Quick Block type">
             <button id="termKindButton" class="kind-button" type="button" role="tab" aria-selected="true" data-kind="terms">Add Term</button>
             <button id="linkKindButton" class="kind-button" type="button" role="tab" aria-selected="false" data-kind="links">Add Link</button>
+            <button id="extensionKindButton" class="kind-button" type="button" role="tab" aria-selected="false" data-kind="extensionIds">Add Extension ID</button>
+            <button id="extensionTermKindButton" class="kind-button" type="button" role="tab" aria-selected="false" data-kind="extensionTerms">Add Extension Term</button>
           </div>
 
           <form id="quickForm" class="quick-form" autocomplete="off" spellcheck="false">

@@ -233,3 +233,8 @@ html[data-platform="android"] .timer-heading-row { flex-direction: column; }
 html[data-platform="android"] .timer-profile-label { width: 100%; }
 html[data-platform="android"] .timer-add-grid { grid-template-columns: 1fr; }
 html[data-platform="android"] .timer-add-grid > input[type="text"] { grid-column: auto; }
+
+/* The extension-detail editor contains independent ID and store-term panels. */
+.extension-terms-view { margin-top: 18px; }
+#extensionIdsHeading[hidden],
+.extension-terms-view[hidden] { display: none; }

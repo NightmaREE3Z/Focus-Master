@@ -2,6 +2,7 @@ import { parseListText, serializeListForKind } from './csv.js';
 import { loadBundledFallbackLists, loadDataset, saveDataset } from './storage.js';
 import { normalizeLinkForStorage, normalizeTerm, normalizeTldForStorage, uniqueInOrder } from './shared.js';
 import { normalizeTrustedSiteEntry } from './trusted-sites.js';
+import { normalizeExtensionRule } from './extension-stores.js';
 
 const browser = globalThis.browser ?? globalThis.chrome;
 const INCOGNITO_CONTEXT = Boolean(browser.extension?.inIncognitoContext);
@@ -47,7 +48,8 @@ export const GITHUB_SYNC_TARGET = Object.freeze({
     links: Object.freeze({ path: 'blocker/lists/blockedLinks.csv', rawUrl: 'https://raw.githubusercontent.com/NightmaREE3Z/Focus-Master/refs/heads/BraveFox/blocker/lists/blockedLinks.csv' }),
     paths: Object.freeze({ path: 'blocker/lists/blockedPaths.csv', rawUrl: 'https://raw.githubusercontent.com/NightmaREE3Z/Focus-Master/refs/heads/BraveFox/blocker/lists/blockedPaths.csv' }),
     tlds: Object.freeze({ path: 'blocker/lists/blockedTLDs.csv', rawUrl: 'https://raw.githubusercontent.com/NightmaREE3Z/Focus-Master/refs/heads/BraveFox/blocker/lists/blockedTLDs.csv' }),
-    trustedSites: Object.freeze({ path: 'blocker/lists/TrustedSites.csv', rawUrl: 'https://raw.githubusercontent.com/NightmaREE3Z/Focus-Master/refs/heads/BraveFox/blocker/lists/TrustedSites.csv' })
+    trustedSites: Object.freeze({ path: 'blocker/lists/TrustedSites.csv', rawUrl: 'https://raw.githubusercontent.com/NightmaREE3Z/Focus-Master/refs/heads/BraveFox/blocker/lists/TrustedSites.csv' }),
+    extensionIds: Object.freeze({ path: 'blocker/lists/blockedExtensionIDs.csv', rawUrl: 'https://raw.githubusercontent.com/NightmaREE3Z/Focus-Master/refs/heads/BraveFox/blocker/lists/blockedExtensionIDs.csv' })
   })
 });
 
@@ -58,8 +60,8 @@ const DEFAULT_CONFIG = Object.freeze({
 });
 const DEFAULT_STATE = Object.freeze({
   termsProfile: 'haukkis', initializedProfiles: { haukkis: false, tapsa: false },
-  initializedLinks: false, initializedPaths: false, initializedTlds: false, initializedTrustedSites: false, pending: [],
-  forceSnapshot: { links: false, paths: false, tlds: false, trustedSites: false, terms: { haukkis: false, tapsa: false } },
+  initializedLinks: false, initializedPaths: false, initializedTlds: false, initializedTrustedSites: false, initializedExtensionIds: false, pending: [],
+  forceSnapshot: { links: false, paths: false, tlds: false, trustedSites: false, extensionIds: false, terms: { haukkis: false, tapsa: false } },
   lastSyncAt: 0, lastAction: '', lastError: ''
 });
 let syncPromise = null;
@@ -74,10 +76,11 @@ function normalizerFor(kind) {
   if (kind === 'links' || kind === 'paths') return normalizeLinkForStorage;
   if (kind === 'tlds') return normalizeTldForStorage;
   if (kind === 'trustedSites') return normalizeTrustedSiteEntry;
+  if (kind === 'extensionIds') return normalizeExtensionRule;
   return normalizeTerm;
 }
 function normalizeKind(kind) {
-  if (kind === 'terms' || kind === 'links' || kind === 'paths' || kind === 'tlds' || kind === 'trustedSites') return kind;
+  if (kind === 'terms' || kind === 'links' || kind === 'paths' || kind === 'tlds' || kind === 'trustedSites' || kind === 'extensionIds') return kind;
   throw new Error('Unknown GitHub Focus Master list type.');
 }
 function termsTarget(profileId) {
@@ -108,7 +111,7 @@ function normalizeState(value, activeProfile = 'haukkis') {
   const termsProfile = normalizeProfile(source.termsProfile || activeProfile);
   const pending = [];
   for (const item of Array.isArray(source.pending) ? source.pending : []) {
-    if (!item || !['terms', 'links', 'paths', 'tlds', 'trustedSites'].includes(item.kind)) continue;
+    if (!item || !['terms', 'links', 'paths', 'tlds', 'trustedSites', 'extensionIds'].includes(item.kind)) continue;
     if (item.action !== 'add' && item.action !== 'remove') continue;
     const normalized = normalizerFor(item.kind)(item.value);
     if (!normalized) continue;
@@ -133,12 +136,14 @@ function normalizeState(value, activeProfile = 'haukkis') {
     initializedPaths: Boolean(source.initializedPaths),
     initializedTlds: Boolean(source.initializedTlds),
     initializedTrustedSites: Boolean(source.initializedTrustedSites),
+    initializedExtensionIds: Boolean(source.initializedExtensionIds),
     pending,
     forceSnapshot: {
       links: Boolean(source.forceSnapshot?.links),
       paths: Boolean(source.forceSnapshot?.paths),
       tlds: Boolean(source.forceSnapshot?.tlds),
       trustedSites: Boolean(source.forceSnapshot?.trustedSites),
+      extensionIds: Boolean(source.forceSnapshot?.extensionIds),
       terms: {
         haukkis: Boolean(source.forceSnapshot?.terms?.haukkis ?? (source.forceSnapshot?.terms === true && termsProfile === 'haukkis')),
         tapsa: Boolean(source.forceSnapshot?.terms?.tapsa ?? (source.forceSnapshot?.terms === true && termsProfile === 'tapsa'))
@@ -544,13 +549,18 @@ async function fetchRawKind(kind, profileId) {
 }
 async function fetchRawLists({ profileId = 'haukkis', bundledFallback = false } = {}) {
   const profile = normalizeProfile(profileId);
-  const kinds = ['terms', 'links', 'paths', 'tlds', 'trustedSites'];
+  const kinds = ['terms', 'links', 'paths', 'tlds', 'trustedSites', 'extensionIds'];
   const results = await Promise.allSettled(kinds.map(kind => fetchRawKind(kind, profile)));
   const output = { profile, usedBundledFallback: false };
   let bundled = null;
   for (let index = 0; index < kinds.length; index += 1) {
     const kind = kinds[index];
     if (results[index].status === 'fulfilled') output[kind] = results[index].value;
+    else if (kind === 'extensionIds' && Number(results[index].reason?.status) === 404) {
+      // Backward-compatible when this newly introduced GitHub file is absent.
+      // Keep local additions rather than wiping them on a manual download.
+      output[kind] = (await loadDataset()).extensionIds;
+    }
     else if (bundledFallback) {
       bundled ||= await loadBundledFallbackLists(profile);
       output[kind] = bundled[kind];
@@ -586,6 +596,7 @@ async function saveDatasetIfChanged(current, next, profile) {
   const paths = uniqueInOrder(next.paths, normalizeLinkForStorage);
   const tlds = uniqueInOrder(next.tlds, normalizeTldForStorage);
   const trustedSites = uniqueInOrder(next.trustedSites, normalizeTrustedSiteEntry);
+  const extensionIds = uniqueInOrder(next.extensionIds, normalizeExtensionRule);
   const normalizedProfile = normalizeProfile(profile || current?.profile);
   if (
     arraysEqual(current?.terms, terms) &&
@@ -593,9 +604,10 @@ async function saveDatasetIfChanged(current, next, profile) {
     arraysEqual(current?.paths, paths) &&
     arraysEqual(current?.tlds, tlds) &&
     arraysEqual(current?.trustedSites, trustedSites) &&
+    arraysEqual(current?.extensionIds, extensionIds) &&
     current?.profile === normalizedProfile
   ) return current;
-  return saveDataset({ terms, links, paths, tlds, trustedSites, profile: normalizedProfile });
+  return saveDataset({ terms, links, paths, tlds, trustedSites, extensionIds, profile: normalizedProfile });
 }
 function scopeFor(kind, profile) { return kind === 'terms' ? normalizeProfile(profile) : 'global'; }
 function pendingFor(state, kind, profile) {
@@ -614,6 +626,7 @@ function setForce(state, kind, profile, value) {
       paths: Boolean(state.forceSnapshot.paths),
       tlds: Boolean(state.forceSnapshot.tlds),
       trustedSites: Boolean(state.forceSnapshot.trustedSites),
+      extensionIds: Boolean(state.forceSnapshot.extensionIds),
       terms: { ...state.forceSnapshot.terms }
     }
   };
@@ -662,7 +675,7 @@ export async function getGitHubSyncStatus(){
     detectedEmail:config.detectedEmail,detectionAvailable:config.detectionAvailable,
     profiles:Object.values(SYNC_PROFILES).map(item=>({id:item.id,label:item.label,termsFile:item.termsFile,emails:[...item.emails]})),
     pendingCount:state.pending.length+
-      Number(state.forceSnapshot.links)+Number(state.forceSnapshot.paths)+Number(state.forceSnapshot.tlds)+Number(state.forceSnapshot.trustedSites)+
+      Number(state.forceSnapshot.links)+Number(state.forceSnapshot.paths)+Number(state.forceSnapshot.tlds)+Number(state.forceSnapshot.trustedSites)+Number(state.forceSnapshot.extensionIds)+
       Number(state.forceSnapshot.terms.haukkis)+Number(state.forceSnapshot.terms.tapsa),
     lastSyncAt:state.lastSyncAt,lastAction:state.lastAction,lastError:state.lastError,
     target:{owner:GITHUB_SYNC_TARGET.owner,repository:GITHUB_SYNC_TARGET.repository,branch:GITHUB_SYNC_TARGET.branch,files:{
@@ -670,7 +683,8 @@ export async function getGitHubSyncStatus(){
       links:GITHUB_SYNC_TARGET.files.links,
       paths:GITHUB_SYNC_TARGET.files.paths,
       tlds:GITHUB_SYNC_TARGET.files.tlds,
-      trustedSites:GITHUB_SYNC_TARGET.files.trustedSites
+      trustedSites:GITHUB_SYNC_TARGET.files.trustedSites,
+      extensionIds:GITHUB_SYNC_TARGET.files.extensionIds
     }}
   };
 }
@@ -713,16 +727,17 @@ export async function downloadGitHubLists({allowBundledFallback=false}={}){
   const downloaded=await fetchRawLists({profileId:profile,bundledFallback:allowBundledFallback});
   const dataset=await saveDataset({
     terms:downloaded.terms,links:downloaded.links,paths:downloaded.paths,tlds:downloaded.tlds,
-    trustedSites:downloaded.trustedSites,profile
+    trustedSites:downloaded.trustedSites,extensionIds:downloaded.extensionIds,profile
   });
   let state=await readState(config);
-  for(const kind of ['terms','links','paths','tlds','trustedSites']) state=clearPending(state,kind,kind==='terms'?profile:'global');
+  for(const kind of ['terms','links','paths','tlds','trustedSites','extensionIds']) state=clearPending(state,kind,kind==='terms'?profile:'global');
   state.termsProfile=profile;
   state.initializedProfiles[profile]=true;
   state.initializedLinks=true;
   state.initializedPaths=true;
   state.initializedTlds=true;
   state.initializedTrustedSites=true;
+  state.initializedExtensionIds=true;
   state=await setStatus(state,{action:downloaded.usedBundledFallback?'Loaded packaged fallback lists':'Downloaded from GitHub',synced:true});
   config=await writeConfig({...config,profileSwitchPending:false,previousProfile:''});
   return {dataset,state,usedBundledFallback:downloaded.usedBundledFallback};
@@ -736,7 +751,7 @@ export async function uploadGitHubLists(){
   const local=await loadDataset({force:true});
   let state=await readState(config);
   const uploaded={};
-  for(const kind of ['terms','links','paths','tlds','trustedSites']){
+  for(const kind of ['terms','links','paths','tlds','trustedSites','extensionIds']){
     const scope=kind==='terms'?profile:'global';
     uploaded[kind]=await uploadExactKind(kind,config.token,local[kind],scope);
     state=clearPending(state,kind,scope);
@@ -748,6 +763,7 @@ export async function uploadGitHubLists(){
   state.initializedPaths=true;
   state.initializedTlds=true;
   state.initializedTrustedSites=true;
+  state.initializedExtensionIds=true;
   state=await setStatus(state,{action:'Uploaded to GitHub',synced:true});
   config=await writeConfig({...config,profileSwitchPending:false,previousProfile:''});
   const dataset=await saveDatasetIfChanged(local,uploaded,profile);
@@ -760,6 +776,7 @@ function isInitializedKind(state,kind,profile){
   if(kind==='paths') return Boolean(state.initializedPaths);
   if(kind==='tlds') return Boolean(state.initializedTlds);
   if(kind==='trustedSites') return Boolean(state.initializedTrustedSites);
+  if(kind==='extensionIds') return Boolean(state.initializedExtensionIds);
   return false;
 }
 function markInitializedKind(state,kind,profile){
@@ -768,6 +785,7 @@ function markInitializedKind(state,kind,profile){
   else if(kind==='paths') state.initializedPaths=true;
   else if(kind==='tlds') state.initializedTlds=true;
   else if(kind==='trustedSites') state.initializedTrustedSites=true;
+  else if(kind==='extensionIds') state.initializedExtensionIds=true;
   return state;
 }
 
@@ -841,7 +859,7 @@ async function runAutomaticSyncInternal(){
   const local=await loadDataset({force:true});
   const canUpload=Boolean(config.token)&&await hasRequiredDataConsent();
   const termsEnabled=!config.profileSwitchPending&&state.termsProfile===config.activeProfile;
-  const next={terms:local.terms,links:local.links,paths:local.paths,tlds:local.tlds,trustedSites:local.trustedSites};
+  const next={terms:local.terms,links:local.links,paths:local.paths,tlds:local.tlds,trustedSites:local.trustedSites,extensionIds:local.extensionIds};
   let warning='';
   let uploaded=false;
   try{
@@ -856,7 +874,7 @@ async function runAutomaticSyncInternal(){
       warning=`Sync Profile changed to ${SYNC_PROFILES[config.activeProfile].label}; terms remain on ${SYNC_PROFILES[state.termsProfile].label} until manual Download or Upload.`;
     }
 
-    for(const kind of ['links','paths','tlds','trustedSites']){
+    for(const kind of ['links','paths','tlds','trustedSites','extensionIds']){
       const result=!isInitializedKind(state,kind,'global')
         ? await initializeKind(kind,'global',next[kind],state,canUpload)
         : await syncKind(kind,'global',next[kind],state,canUpload);
@@ -875,7 +893,40 @@ async function runAutomaticSyncInternal(){
 
 export async function runAutomaticGitHubSync(){if(INCOGNITO_CONTEXT)return{skipped:true,reason:'GitHub sync is disabled in Incognito.'};if(syncPromise)return syncPromise;syncPromise=runAutomaticSyncInternal().finally(()=>{syncPromise=null;});return syncPromise;}
 function setupGitHubSyncAlarms(config=DEFAULT_CONFIG){if(config.autoSync)browser.alarms.create(AUTO_SYNC_ALARM,{periodInMinutes:AUTO_SYNC_INTERVAL_MINUTES});else{void browser.alarms.clear(AUTO_SYNC_ALARM);void browser.alarms.clear(DEBOUNCED_SYNC_ALARM);}}
-export async function initializeGitHubSync(){if(INCOGNITO_CONTEXT){void browser.alarms.clear(AUTO_SYNC_ALARM);void browser.alarms.clear(DEBOUNCED_SYNC_ALARM);void browser.alarms.clear(PAT_RECOVERY_RETRY_ALARM);return{skipped:true,incognito:true,reason:'Management sync and profile detection are disabled in Incognito.'};}const config=await refreshProfileDetection({allowInitialSelection:true});const state=await readState(config);if(!state.termsProfile)state.termsProfile=config.activeProfile;await writeState(state,config);setupGitHubSyncAlarms(config);if(config.tokenRecovery&&!config.token){try{browser.alarms.create(PAT_RECOVERY_RETRY_ALARM,{when:Date.now()+30000});}catch{}}else{void browser.alarms.clear(PAT_RECOVERY_RETRY_ALARM);}if(config.autoSync)scheduleAutomaticGitHubSync();return getGitHubSyncStatus();}
+// One-time, additive seed of the user-requested browser-in-browser store blocks.
+// Keep these editable through the existing Terms / Extension IDs managers.
+// Queue ADD operations, not full-list replacements: GitHub may have newer rows.
+async function seedBrowserInBrowserRules(config, profileState) {
+  const keys = ['bfb:browser-store-ids-seeded-v1', 'bfb:browser-store-terms-seeded-haukkis-v1'];
+  const flags = await browser.storage.local.get(keys);
+  const doIds = flags[keys[0]] !== true;
+  const current = await loadDataset({ force: true });
+  const doTerms = flags[keys[1]] !== true && config.activeProfile === 'haukkis' &&
+    profileState.termsProfile === 'haukkis' && current.profile === 'haukkis';
+  if (!doIds && !doTerms) return;
+  const packaged = await loadBundledFallbackLists('haukkis');
+  const seedIds = doIds ? packaged.extensionIds : [];
+  const seedTerms = doTerms ? packaged.terms.filter(term => term.startsWith('store:')) : [];
+  const terms = uniqueInOrder([...current.terms, ...seedTerms], normalizeTerm);
+  const extensionIds = uniqueInOrder([...current.extensionIds, ...seedIds], normalizeExtensionRule);
+  if (terms.length !== current.terms.length || extensionIds.length !== current.extensionIds.length) {
+    await saveDataset({
+      terms, extensionIds,
+      links: current.links, paths: current.paths, tlds: current.tlds,
+      trustedSites: current.trustedSites, profile: current.profile
+    });
+  }
+  // Retry until completely queued, even if a previous interrupted run saved
+  // the local dataset before finishing the remote-operation queue.
+  for (const term of seedTerms) await queueRemoteOperation('terms', 'add', term);
+  for (const rule of seedIds) await queueRemoteOperation('extensionIds', 'add', rule);
+  await browser.storage.local.set({
+    ...(doIds ? { [keys[0]]: true } : {}),
+    ...(doTerms ? { [keys[1]]: true } : {})
+  });
+}
+
+export async function initializeGitHubSync(){if(INCOGNITO_CONTEXT){void browser.alarms.clear(AUTO_SYNC_ALARM);void browser.alarms.clear(DEBOUNCED_SYNC_ALARM);void browser.alarms.clear(PAT_RECOVERY_RETRY_ALARM);return{skipped:true,incognito:true,reason:'Management sync and profile detection are disabled in Incognito.'};}const config=await refreshProfileDetection({allowInitialSelection:true});const state=await readState(config);if(!state.termsProfile)state.termsProfile=config.activeProfile;await writeState(state,config);try { await seedBrowserInBrowserRules(config, state); } catch (error) { console.warn(`${LOG_PREFIX} Store block seed failed:`, error); }setupGitHubSyncAlarms(config);if(config.tokenRecovery&&!config.token){try{browser.alarms.create(PAT_RECOVERY_RETRY_ALARM,{when:Date.now()+30000});}catch{}}else{void browser.alarms.clear(PAT_RECOVERY_RETRY_ALARM);}if(config.autoSync)scheduleAutomaticGitHubSync();return getGitHubSyncStatus();}
 browser.alarms.onAlarm.addListener(alarm=>{if(INCOGNITO_CONTEXT)return;if(alarm.name!==AUTO_SYNC_ALARM&&alarm.name!==DEBOUNCED_SYNC_ALARM&&alarm.name!==PAT_RECOVERY_RETRY_ALARM)return;void runAutomaticGitHubSync().catch(error=>console.warn(`${LOG_PREFIX} Automatic sync failed; the last valid local lists remain active:`,error));});
 browser.runtime.onStartup.addListener(()=>{if(!INCOGNITO_CONTEXT)void initializeGitHubSync();});
 browser.runtime.onInstalled.addListener(()=>{if(!INCOGNITO_CONTEXT)void initializeGitHubSync();});

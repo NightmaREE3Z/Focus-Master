@@ -214,8 +214,8 @@ if (type === 'schedule') {
   if (quotaVisual) quotaVisual.hidden = false;
 }
 
-if (type === 'link' || type === 'tld' || type === 'schedule' || type === 'quota' || type === 'unsupported') {
-  triggerLabel.textContent = type === 'tld'
+if (type === 'extension' || type === 'link' || type === 'tld' || type === 'schedule' || type === 'quota' || type === 'unsupported') {
+  triggerLabel.textContent = type === 'extension' ? 'ESTETTY LAAJENNUS:' : type === 'tld'
     ? 'ESTETTY TLD:'
     : type === 'schedule'
       ? 'AJASTETTU ESTO:'
