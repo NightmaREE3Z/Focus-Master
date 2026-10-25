@@ -137,7 +137,7 @@ function exportNameForKind(kind) {
 function displayEntry(kind, value) {
   if (kind === 'terms' && isStoreTerm(value)) return {
     text: value.replace(/^store:/i, ''), badge: 'STORE', badgeClass: 'terms',
-    title: 'Matches extension-store listing titles and URL slugs only.'
+    title: 'Matches extension-store listing titles/slugs and Chrome Web Store search phrases.'
   };
   if (kind !== 'trustedSites') return { text: value, badge: kind === 'links' ? 'LINK' : kind === 'paths' ? 'PATH' : kind === 'tlds' ? 'TLD' : '', badgeClass: kind };
   const descriptor = parseTrustedSiteEntry(value);

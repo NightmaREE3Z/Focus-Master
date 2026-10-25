@@ -612,14 +612,17 @@ function isTwitchUrl(value) {
   }
 }
 
-async function evaluateNavigation(tabId, url, title = '') {
+async function evaluateNavigation(tabId, url, title = '', recheck = false) {
   if (!Number.isInteger(tabId) || tabId < 0) return;
   if (isTwitchUrl(url)) return;
   if (!isSupportedWebUrl(url)) return;
   if (isGoogleMapsOrEarthUrl(url)) return;
   if (shouldBypassRedirect(tabId, url) || redirectInFlight.has(tabId)) return;
   const last = recentlyRedirected.get(tabId);
-  if (last && last.url === url && Date.now() - last.at < 1500) return;
+  // A recently blocked URL can legitimately become the current page again via
+  // Back/Forward (including BFCache restores). Only throttle repeated events
+  // for the first redirect; explicit history/restoration checks must run.
+  if (!recheck && last && last.url === url && Date.now() - last.at < 1500) return;
 
   // Trusted sites now live in the same synchronized dataset as the other
   // Focus Master rules. Loading the dataset first also applies the current
@@ -823,14 +826,66 @@ async function authenticatePopupAndOpen(message, sender) {
   return { ok: true, unlocked: true };
 }
 
-browser.webNavigation.onBeforeNavigate.addListener(details => {
+// Both regular navigation and BFCache/history restoration need inspection.
+// The Web Store is a browser-protected origin, so rely on top-level URL/title
+// metadata rather than trying to inject a content script into its pages.
+function evaluateTopLevelNavigation(details, recheck = false) {
   if (details.frameId !== 0) return;
-  void evaluateNavigation(details.tabId, details.url, '');
+  if (!recheck) {
+    void evaluateNavigation(details.tabId, details.url);
+    return;
+  }
+  // Navigation events for an earlier document can arrive after this tab has
+  // already been redirected. Never act on a stale completed/history URL.
+  void browser.tabs.get(details.tabId).then(tab => {
+    if (normalizedComparableUrl(tab?.url) !== normalizedComparableUrl(details.url)) return;
+    return evaluateNavigation(details.tabId, details.url, '', true);
+  }).catch(() => {});
+}
+
+browser.webNavigation.onBeforeNavigate.addListener(details => {
+  evaluateTopLevelNavigation(details);
 });
 try {
+  browser.webNavigation.onCommitted.addListener(details => {
+    // Back/Forward can revive a previously blocked document without a new
+    // network request; do not apply the recent-redirect throttle to it.
+    const isBackForward = details.transitionQualifiers?.includes('forward_back');
+    evaluateTopLevelNavigation(details, Boolean(isBackForward));
+  });
+} catch {}
+try {
   browser.webNavigation.onHistoryStateUpdated.addListener(details => {
-    if (details.frameId !== 0) return;
-    void evaluateNavigation(details.tabId, details.url, '');
+    evaluateTopLevelNavigation(details, true);
+  });
+} catch {}
+try {
+  browser.webNavigation.onReferenceFragmentUpdated.addListener(details => {
+    evaluateTopLevelNavigation(details, true);
+  });
+} catch {}
+try {
+  browser.webNavigation.onCompleted.addListener(details => {
+    // Covers restored documents and timing gaps in SPA navigation. Only a
+    // committed current URL is rechecked; the first pass happens earlier.
+    evaluateTopLevelNavigation(details, true);
+  });
+} catch {}
+async function evaluateCurrentTab(tabId) {
+  if (!Number.isInteger(tabId) || tabId < 0) return;
+  try {
+    const tab = await browser.tabs.get(tabId);
+    if (tab?.url) await evaluateNavigation(tabId, tab.url, tab.title || '', true);
+  } catch {}
+}
+try {
+  browser.tabs.onActivated.addListener(({ tabId }) => {
+    void evaluateCurrentTab(tabId);
+  });
+} catch {}
+try {
+  browser.webNavigation.onTabReplaced.addListener(({ tabId }) => {
+    void evaluateCurrentTab(tabId);
   });
 } catch {}
 browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {

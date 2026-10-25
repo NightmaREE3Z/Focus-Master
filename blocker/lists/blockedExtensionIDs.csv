@@ -1,3 +1,5 @@
+# Format: chrome:<32-letter-id>, edge:<32-letter-id>, amo:<listing-slug>, opera:<listing-slug>
+# Paste a supported store detail URL in Quick Block to generate a rule.
 chrome:hehijbfgiekmjfkfjpbkbammjbdenadd
 chrome:moffahdcgnjnglbepimcggkjacdmpojc
 chrome:dkhhkjpckbmkfdicijemmdaieaagkcco

@@ -34,6 +34,26 @@ export function extensionListingFromUrl(input) {
   return { store, id, rule: `${store}:${id}` };
 }
 
+// Chrome Web Store search phrases are part of the path, not ?q=.
+// Only interpret searches on the real store origin; never scan a different
+// site's URL or tracking parameters for store-scoped terms.
+export function extensionSearchFromUrl(input) {
+  let url;
+  try { url = new URL(String(input || '').trim()); } catch { return null; }
+  if ((url.protocol !== 'https:' && url.protocol !== 'http:') ||
+      url.hostname.toLowerCase() !== 'chromewebstore.google.com') return null;
+  const parts = url.pathname.split('/').filter(Boolean);
+  if (parts[0]?.toLowerCase() !== 'search' || parts.length > 2) return null;
+  let query = '';
+  if (parts.length === 2) {
+    try { query = decodeURIComponent(parts[1]); } catch { return null; }
+  } else {
+    query = url.searchParams.get('q') || '';
+  }
+  query = query.trim();
+  return query ? { store: 'chrome', query } : null;
+}
+
 export function normalizeExtensionRule(value) {
   const raw = String(value ?? '').trim();
   const fromUrl = extensionListingFromUrl(raw);

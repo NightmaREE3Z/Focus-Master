@@ -1,4 +1,4 @@
-import { extensionListingFromUrl, matchExtensionListing } from './extension-stores.js';
+import { extensionListingFromUrl, extensionSearchFromUrl, matchExtensionListing } from './extension-stores.js';
 import {
   isSupportedWebUrl,
   normalizeSearchable,
@@ -351,10 +351,13 @@ function exactHostnameLabels(urlValue) {
   }
 }
 
-// `store:` entries are deliberately limited to extension-store detail pages.
-// Use the listing slug plus cleaned tab title only: never match IDs against
-// arbitrary content, nor make broad store terms block unrelated web pages.
+// `store:` entries match extension-store detail listings and the actual
+// Chrome Web Store /search/<phrase> route. Search URLs use only their explicit
+// phrase, never page titles or tracking parameters. Detail pages still use
+// listing slugs and cleaned titles, not unrelated page content or raw IDs.
 function storeTitleCandidates(url, title) {
+  const search = extensionSearchFromUrl(url);
+  if (search) return [normalizeSearchable(search.query)].filter(Boolean);
   const listing = extensionListingFromUrl(url);
   if (!listing) return [];
   const candidates = [];

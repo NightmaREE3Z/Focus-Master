@@ -84,7 +84,7 @@
       <header class="subpanel-heading">
         <div>
           <h2>Blocked Extension Terms</h2>
-          <p>Block extension listings across supported stores by title or listing URL slug. No global website matching.</p>
+          <p>Block extension listings by title or URL slug, and Chrome Web Store searches by phrase. No global website matching.</p>
         </div>
         <span id="extensionTermCount" class="count-pill">0</span>
       </header>
@@ -103,7 +103,7 @@
         <button id="extensionTermExportButton" class="secondary-button">Export CSV</button>
         <input id="extensionTermFileInput" type="file" accept=".csv,.txt,text/csv,text/plain" hidden>
       </div>
-      <p class="order-note">Extension terms are saved as store:phrase entries in the active profile's blockedTerms.csv. Import/replace here preserves global terms, exact extension IDs, and all other lists. Matching uses store listing URLs and tab titles, not protected store-page elements.</p>
+      <p class="order-note">Extension terms are saved as store:phrase entries in the active profile's blockedTerms.csv. Import/replace here preserves global terms, exact extension IDs, and all other lists. Matching uses store listing URLs/tab titles and Chrome Web Store search paths, not protected store-page elements.</p>
       <div id="extensionTermEmptyState" class="empty-state" hidden>No blocked extension terms yet.</div>
       <div id="extensionTermItems" class="items" role="list"></div>
     </section>
