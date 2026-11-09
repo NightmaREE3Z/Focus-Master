@@ -89,6 +89,10 @@ domain,notebookcheck.net,
 domain,videocardz.com,
 domain,arstechnica.com,
 domain,bleepingcomputer.com,
+domain,wccftech.com,
+domain,jayztwocents.com
+domain,store.jayztwocents.com
+domain,lttstore.com,
 domain,neowin.net,
 domain,pcgamer.com,
 domain,igorslab.de,
@@ -249,6 +253,8 @@ domain,secure.runescape.com,
 domain,services.runescape.com,
 domain,info.runescape.com,
 domain,apps.runescape.com,
+domain,oldschool.runescape.com
+domain,runescape.com
 domain,account.runescape.com,
 domain,epform.pci.aws.jagex.com,
 domain,payments.jagex.com,
